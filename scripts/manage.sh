@@ -120,13 +120,6 @@ dotnet_cmd() {
   true
 }
 
-dotnet_service_path() {
-  local resolved
-  resolved="$(dotnet_cmd)"
-  [ -n "$resolved" ] || fail "dotnet was not found; run install-deps first"
-  readlink -f "$resolved"
-}
-
 service_env() {
   if [ -f "$ENV_FILE" ]; then
     # shellcheck disable=SC1090
@@ -279,6 +272,15 @@ ensure_service_user() {
 
 write_env_file() {
   local effective_api_key="$API_KEY"
+  if [ -z "$effective_api_key" ] && [ -f "$ENV_FILE" ]; then
+    local existing_api_key
+    existing_api_key="$(awk -F= '$1 == "MusicDecrypto__ApiKey" {print substr($0, index($0, "=") + 1)}' "$ENV_FILE" | tail -n 1)"
+    if [ -n "$existing_api_key" ]; then
+      effective_api_key="$existing_api_key"
+      log "API_KEY was not provided; reusing the existing API key from $ENV_FILE."
+    fi
+  fi
+
   if [ -z "$effective_api_key" ]; then
     effective_api_key="$(generate_api_key)"
     log "API_KEY was not provided; generated a random 32-character API key."
@@ -302,9 +304,6 @@ ENV
 }
 
 write_service_file() {
-  local dotnet_path
-  dotnet_path="$(dotnet_service_path)"
-
   log "Writing $SERVICE_FILE"
   cat >"$SERVICE_FILE" <<SERVICE
 [Unit]
@@ -317,14 +316,15 @@ User=$SERVICE_USER
 Group=$SERVICE_GROUP
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$ENV_FILE
-ExecStart=$dotnet_path $PUBLISH_DIR/MusicDecrypto.Backend.dll
+Environment=PATH=$DOTNET_INSTALL_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/env dotnet $PUBLISH_DIR/MusicDecrypto.Backend.dll
 Restart=always
 RestartSec=5
 
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=$DATA_DIR $TEMP_DIR
+ReadWritePaths=-$DATA_DIR -$TEMP_DIR
 
 [Install]
 WantedBy=multi-user.target

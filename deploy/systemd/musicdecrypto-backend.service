@@ -7,7 +7,8 @@ Type=simple
 User=musicdecrypto
 Group=musicdecrypto
 WorkingDirectory=/opt/musicdecrypto/backend
-ExecStart=/usr/bin/dotnet /opt/musicdecrypto/backend/publish/MusicDecrypto.Backend.dll
+Environment=PATH=/opt/dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/env dotnet /opt/musicdecrypto/backend/publish/MusicDecrypto.Backend.dll
 Restart=always
 RestartSec=5
 Environment=ASPNETCORE_ENVIRONMENT=Production
@@ -21,7 +22,7 @@ Environment=MusicDecrypto__DecryptoExecutablePath=/opt/musicdecrypto/backend/pac
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/var/lib/musicdecrypto /var/tmp/musicdecrypto
+ReadWritePaths=-/var/lib/musicdecrypto -/var/tmp/musicdecrypto
 
 [Install]
 WantedBy=multi-user.target
