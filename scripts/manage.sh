@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  if command -v bash >/dev/null 2>&1; then
+    exec bash "$0" "$@"
+  fi
+
+  echo "Error: bash is required to run this script." >&2
+  exit 1
+fi
+
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,6 +29,9 @@ PACKAGE_ARCHIVE="${PACKAGE_ARCHIVE:-$PROJECT_DIR/deploy/package/musicdecrypto-li
 PACKAGE_DIR="${PACKAGE_DIR:-$APP_DIR/package}"
 ENV_FILE="${ENV_FILE:-/etc/$SERVICE_NAME.env}"
 SERVICE_FILE="${SERVICE_FILE:-/etc/systemd/system/$SERVICE_NAME.service}"
+DOTNET_CHANNEL="${DOTNET_CHANNEL:-10.0}"
+DOTNET_INSTALL_DIR="${DOTNET_INSTALL_DIR:-/opt/dotnet}"
+DOTNET_INSTALL_SCRIPT_URL="${DOTNET_INSTALL_SCRIPT_URL:-https://dot.net/v1/dotnet-install.sh}"
 
 usage() {
   cat <<USAGE
@@ -52,6 +65,9 @@ Common settings:
   PORT=$PORT
   API_KEY=<secret>
   PACKAGE_ARCHIVE=$PACKAGE_ARCHIVE
+  DOTNET_CHANNEL=$DOTNET_CHANNEL
+  DOTNET_INSTALL_DIR=$DOTNET_INSTALL_DIR
+  DOTNET_INSTALL_SCRIPT_URL=$DOTNET_INSTALL_SCRIPT_URL
 
 Examples:
   sudo API_KEY='replace-with-secret' PORT=5080 $0 install-service
@@ -86,7 +102,22 @@ dotnet_cmd() {
     return
   fi
 
-  command -v dotnet 2>/dev/null || true
+  if command -v dotnet >/dev/null 2>&1; then
+    command -v dotnet
+    return
+  fi
+
+  if [ -x "$DOTNET_INSTALL_DIR/dotnet" ]; then
+    printf '%s\n' "$DOTNET_INSTALL_DIR/dotnet"
+    return
+  fi
+
+  if [ -x /tmp/dotnet/dotnet ]; then
+    printf '%s\n' /tmp/dotnet/dotnet
+    return
+  fi
+
+  true
 }
 
 dotnet_service_path() {
@@ -128,7 +159,18 @@ ENV_FILE=$ENV_FILE
 SERVICE_FILE=$SERVICE_FILE
 FORCE_OVERWRITE=$FORCE_OVERWRITE
 EXTENSIVE_DETECTION=$EXTENSIVE_DETECTION
+DOTNET_CHANNEL=$DOTNET_CHANNEL
+DOTNET_INSTALL_DIR=$DOTNET_INSTALL_DIR
+DOTNET_INSTALL_SCRIPT_URL=$DOTNET_INSTALL_SCRIPT_URL
 CONFIG
+}
+
+dotnet_has_required_sdk() {
+  local dotnet_path
+  dotnet_path="$(dotnet_cmd)"
+  [ -n "$dotnet_path" ] || return 1
+
+  "$dotnet_path" --list-sdks 2>/dev/null | awk '{print $1}' | grep -Eq "^${DOTNET_CHANNEL//./\\.}\\."
 }
 
 cmd_env_check() {
@@ -174,7 +216,7 @@ cmd_install_deps() {
 
   log "Installing base packages"
   apt-get update
-  apt-get install -y ca-certificates curl gzip tar wget gpg
+  apt-get install -y ca-certificates curl gzip tar wget gpg openssl
 
   if ! have dotnet; then
     log "Installing Microsoft package feed"
@@ -184,8 +226,24 @@ cmd_install_deps() {
     apt-get update
   fi
 
-  log "Installing .NET 10 SDK"
-  apt-get install -y dotnet-sdk-10.0
+  if dotnet_has_required_sdk; then
+    log ".NET SDK $DOTNET_CHANNEL is already installed"
+    return
+  fi
+
+  if apt-cache show "dotnet-sdk-$DOTNET_CHANNEL" >/dev/null 2>&1; then
+    log "Installing .NET SDK $DOTNET_CHANNEL from apt"
+    apt-get install -y "dotnet-sdk-$DOTNET_CHANNEL"
+    return
+  fi
+
+  log "apt package dotnet-sdk-$DOTNET_CHANNEL was not found; installing with Microsoft dotnet-install script"
+  log "Download script: $DOTNET_INSTALL_SCRIPT_URL"
+  log "Install directory: $DOTNET_INSTALL_DIR"
+  mkdir -p "$DOTNET_INSTALL_DIR"
+  curl -fsSL "$DOTNET_INSTALL_SCRIPT_URL" -o /tmp/dotnet-install.sh
+  bash /tmp/dotnet-install.sh --channel "$DOTNET_CHANNEL" --quality GA --install-dir "$DOTNET_INSTALL_DIR"
+  ln -sf "$DOTNET_INSTALL_DIR/dotnet" /usr/local/bin/dotnet
 }
 
 cmd_publish() {

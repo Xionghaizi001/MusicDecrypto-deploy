@@ -70,6 +70,22 @@ On a VPS with no .NET SDK installed:
 sudo scripts/manage.sh install-deps
 ```
 
+`install-deps` first tries the Microsoft apt feed package `dotnet-sdk-10.0`. If that package is not available for the current distro/feed, it falls back to Microsoft's official install script:
+
+- install script: `https://dot.net/v1/dotnet-install.sh`
+- default SDK feed used by that script: `https://builds.dotnet.microsoft.com/dotnet`
+- default install directory used by this project: `/opt/dotnet`
+
+Override the fallback settings if needed:
+
+```bash
+sudo \
+  DOTNET_CHANNEL=10.0 \
+  DOTNET_INSTALL_DIR=/opt/dotnet \
+  DOTNET_INSTALL_SCRIPT_URL=https://dot.net/v1/dotnet-install.sh \
+  scripts/manage.sh install-deps
+```
+
 Install and start the service:
 
 ```bash
