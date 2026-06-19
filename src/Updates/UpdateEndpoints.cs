@@ -9,8 +9,28 @@ internal static class UpdateEndpoints
     {
         app.MapGet("/update", () => Results.Content(UpdatePage.Html, "text/html; charset=utf-8"));
 
+        app.MapGet("/update/batches", ListAsync);
+
         app.MapPost("/update", UploadAsync)
             .DisableAntiforgery();
+
+        app.MapPost("/update/{batchId}/apply", ApplyAsync);
+
+        app.MapDelete("/update/{batchId}", DeleteAsync);
+    }
+
+    private static Results<Ok<IReadOnlyCollection<UpdateBatchInfo>>, UnauthorizedHttpResult> ListAsync(
+        HttpRequest request,
+        IOptions<AppOptions> options,
+        IWebHostEnvironment environment)
+    {
+        if (!UpdateAuth.IsAuthorized(request, options.Value.ApiKey))
+        {
+            return TypedResults.Unauthorized();
+        }
+
+        var paths = AppPaths.From(options.Value, environment.ContentRootPath);
+        return TypedResults.Ok(UpdatePackageService.ListBatches(paths.Updates));
     }
 
     private static async Task<Results<Ok<UpdateUploadResult>, UnauthorizedHttpResult, BadRequest<string>>> UploadAsync(
@@ -36,44 +56,57 @@ internal static class UpdateEndpoints
         }
 
         var paths = AppPaths.From(options.Value, environment.ContentRootPath);
-        var batchId = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss") + "-" + Guid.NewGuid().ToString("N")[..8];
-        var batchDirectory = Path.Combine(paths.Updates, batchId);
-        Directory.CreateDirectory(batchDirectory);
-
-        var savedFiles = new List<UpdateUploadedFile>();
-        foreach (var file in form.Files)
+        try
         {
-            if (file.Length == 0)
-            {
-                continue;
-            }
+            var result = await UpdatePackageService.SaveUploadAsync(form.Files, paths.Updates, cancellationToken);
+            return TypedResults.Ok(result);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            return TypedResults.BadRequest(ex.Message);
+        }
+    }
 
-            var relativePath = RelativePathSanitizer.Sanitize(file.FileName);
-            var targetPath = Path.GetFullPath(Path.Combine(batchDirectory, relativePath));
-            if (!targetPath.StartsWith(batchDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
-                !string.Equals(targetPath, batchDirectory, StringComparison.Ordinal))
-            {
-                return TypedResults.BadRequest($"Invalid file path: {file.FileName}");
-            }
-
-            var targetDirectory = Path.GetDirectoryName(targetPath);
-            if (!string.IsNullOrEmpty(targetDirectory))
-            {
-                Directory.CreateDirectory(targetDirectory);
-            }
-
-            await using var source = file.OpenReadStream();
-            await using var target = File.Create(targetPath);
-            await source.CopyToAsync(target, cancellationToken);
-
-            savedFiles.Add(new UpdateUploadedFile(relativePath, file.Length));
+    private static async Task<Results<Ok<UpdateApplyResult>, UnauthorizedHttpResult, NotFound, BadRequest<string>>> ApplyAsync(
+        string batchId,
+        HttpRequest request,
+        IOptions<AppOptions> options,
+        IWebHostEnvironment environment,
+        CancellationToken cancellationToken)
+    {
+        if (!UpdateAuth.IsAuthorized(request, options.Value.ApiKey))
+        {
+            return TypedResults.Unauthorized();
         }
 
-        if (savedFiles.Count == 0)
+        var paths = AppPaths.From(options.Value, environment.ContentRootPath);
+        try
         {
-            return TypedResults.BadRequest("Uploaded files were empty.");
+            var result = await UpdatePackageService.ApplyAsync(paths.Updates, paths.UpdateApplyRoot, batchId, cancellationToken);
+            return TypedResults.Ok(result);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return TypedResults.NotFound();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            return TypedResults.BadRequest(ex.Message);
+        }
+    }
+
+    private static Results<Ok<UpdateDeleteResult>, UnauthorizedHttpResult> DeleteAsync(
+        string batchId,
+        HttpRequest request,
+        IOptions<AppOptions> options,
+        IWebHostEnvironment environment)
+    {
+        if (!UpdateAuth.IsAuthorized(request, options.Value.ApiKey))
+        {
+            return TypedResults.Unauthorized();
         }
 
-        return TypedResults.Ok(new UpdateUploadResult(batchId, batchDirectory, savedFiles));
+        var paths = AppPaths.From(options.Value, environment.ContentRootPath);
+        return TypedResults.Ok(UpdatePackageService.Delete(paths.Updates, batchId));
     }
 }

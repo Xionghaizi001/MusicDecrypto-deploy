@@ -21,13 +21,16 @@ ASP.NET Core Minimal API backend for uploading encrypted music files with tus re
 - `GET /api/jobs/{id}/download`: download decrypted output
 - `GET /update`: simple browser upload page for update files
 - `POST /update`: upload update files into `UpdateRoot/{batchId}`
+- `GET /update/batches`: list uploaded update batches
+- `POST /update/{batchId}/apply`: verify and apply one update batch into `UpdateApplyRoot`
+- `DELETE /update/{batchId}`: delete one uploaded update batch
 
 If `MusicDecrypto:ApiKey` is set, calls under `/files` and `/api` must include either:
 
 - `X-Api-Key: <key>`
 - `Authorization: Bearer <key>`
 
-The update upload endpoint uses `X-Update-Key` with the configured API key reversed. For example, if the API key is `abc123`, send `X-Update-Key: 321cba`. The browser page accepts the normal API key and reverses it before sending the request.
+The update endpoints use `X-Update-Key` with the configured API key reversed. For example, if the API key is `abc123`, send `X-Update-Key: 321cba`. The browser page accepts the normal API key and reverses it before sending the request.
 
 ## Local Development
 
@@ -60,6 +63,23 @@ chmod +x scripts/tus-upload.sh
 scripts/tus-upload.sh http://127.0.0.1:5080 ./sample.ncm
 ```
 
+Development helper commands:
+
+```bash
+scripts/dev.sh server
+scripts/dev.sh pack --git HEAD~1..HEAD -o /tmp/update.zip
+scripts/dev.sh pack --files Program.cs src/Updates/UpdateEndpoints.cs -o /tmp/update.zip
+```
+
+The update package format is a zip with this root structure:
+
+```text
+musicdecrypto-update.json
+files/<relative target paths>
+```
+
+The manifest format is `musicdecrypto.update.v1` and lists each target path, package source path, file size, and SHA-256. The backend verifies the manifest before applying files.
+
 ## VPS Deployment
 
 These commands assume Ubuntu/Debian. The default installation uses:
@@ -68,6 +88,7 @@ These commands assume Ubuntu/Debian. The default installation uses:
 - data directory: `/var/lib/musicdecrypto`
 - temporary tus directory: `/var/tmp/musicdecrypto`
 - update upload directory: `/var/lib/musicdecrypto/updates`
+- update apply directory: `/opt/musicdecrypto/backend`
 - service port: `127.0.0.1:5080`
 
 Run an environment check:
@@ -112,6 +133,7 @@ sudo \
   DATA_DIR=/srv/musicdecrypto/data \
   TEMP_DIR=/srv/musicdecrypto/tmp \
   UPDATE_DIR=/srv/musicdecrypto/updates \
+  APPLY_DIR=/opt/musicdecrypto/backend \
   ALLOWED_ORIGINS=https://your-frontend.example.com \
   API_KEY='replace-with-a-long-random-secret' \
   scripts/manage.sh install-service
@@ -128,6 +150,7 @@ scripts/manage.sh api-check
 scripts/manage.sh logs
 sudo PORT=5082 scripts/manage.sh configure
 sudo UPDATE_DIR=/srv/musicdecrypto/updates scripts/manage.sh configure
+sudo APPLY_DIR=/opt/musicdecrypto/backend scripts/manage.sh configure
 sudo ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com scripts/manage.sh configure
 sudo scripts/manage.sh reinstall-deps
 sudo scripts/manage.sh uninstall
@@ -157,6 +180,7 @@ Edit `server_name example.com;` before enabling HTTPS.
 - tus resumable upload files are stored under `TempRoot/tus`.
 - Uploaded files are copied into `StorageRoot/uploads`.
 - Decrypted files are written under `StorageRoot/outputs/{jobId}`.
-- Files uploaded through `/update` are stored under `UpdateRoot/{batchId}` and are not automatically applied to the running service.
+- Files uploaded through `/update` are stored under `UpdateRoot/{batchId}`.
+- Applying a batch copies manifest-listed files into `UpdateApplyRoot`; it does not automatically restart the service.
 - Job state is stored in `StorageRoot/state/jobs.json`.
 - The current worker processes jobs one at a time, which is conservative for CPU and disk usage on a small VPS.

@@ -21,6 +21,7 @@ PROVIDED_PUBLISH_DIR="${PUBLISH_DIR+x}"
 PROVIDED_DATA_DIR="${DATA_DIR+x}"
 PROVIDED_TEMP_DIR="${TEMP_DIR+x}"
 PROVIDED_UPDATE_DIR="${UPDATE_DIR+x}"
+PROVIDED_APPLY_DIR="${APPLY_DIR+x}"
 PROVIDED_BIND_HOST="${BIND_HOST+x}"
 PROVIDED_PORT="${PORT+x}"
 PROVIDED_API_KEY="${API_KEY+x}"
@@ -37,6 +38,7 @@ PUBLISH_DIR="${PUBLISH_DIR:-$APP_DIR/publish}"
 DATA_DIR="${DATA_DIR:-/var/lib/musicdecrypto}"
 TEMP_DIR="${TEMP_DIR:-/var/tmp/musicdecrypto}"
 UPDATE_DIR="${UPDATE_DIR:-$DATA_DIR/updates}"
+APPLY_DIR="${APPLY_DIR:-$APP_DIR}"
 BIND_HOST="${BIND_HOST:-127.0.0.1}"
 PORT="${PORT:-5080}"
 API_KEY="${API_KEY:-}"
@@ -81,6 +83,7 @@ Common settings:
   DATA_DIR=$DATA_DIR
   TEMP_DIR=$TEMP_DIR
   UPDATE_DIR=$UPDATE_DIR
+  APPLY_DIR=$APPLY_DIR
   BIND_HOST=$BIND_HOST
   PORT=$PORT
   API_KEY=<secret>
@@ -278,6 +281,11 @@ resolve_runtime_config() {
     UPDATE_DIR="${UPDATE_DIR:-$DATA_DIR/updates}"
   fi
 
+  if ! was_provided APPLY_DIR; then
+    APPLY_DIR="$(env_value MusicDecrypto__UpdateApplyRoot || true)"
+    APPLY_DIR="${APPLY_DIR:-$APP_DIR}"
+  fi
+
   if ! was_provided PACKAGE_DIR; then
     local existing_executable
     existing_executable="$(env_value MusicDecrypto__DecryptoExecutablePath || true)"
@@ -316,6 +324,7 @@ PUBLISH_DIR=$PUBLISH_DIR
 DATA_DIR=$DATA_DIR
 TEMP_DIR=$TEMP_DIR
 UPDATE_DIR=$UPDATE_DIR
+APPLY_DIR=$APPLY_DIR
 BIND_HOST=$BIND_HOST
 PORT=$PORT
 PACKAGE_ARCHIVE=$PACKAGE_ARCHIVE
@@ -471,6 +480,7 @@ Kestrel__Endpoints__Http__Url=http://$BIND_HOST:$PORT
 MusicDecrypto__StorageRoot=$DATA_DIR
 MusicDecrypto__TempRoot=$TEMP_DIR
 MusicDecrypto__UpdateRoot=$UPDATE_DIR
+MusicDecrypto__UpdateApplyRoot=$APPLY_DIR
 MusicDecrypto__DecryptoExecutablePath=$PACKAGE_DIR/musicdecrypto
 MusicDecrypto__ApiKey=$effective_api_key
 MusicDecrypto__ForceOverwrite=$FORCE_OVERWRITE
@@ -490,9 +500,8 @@ cmd_configure() {
   log "Updating runtime configuration"
   write_env_file
   write_service_file
-  mkdir -p "$DATA_DIR" "$TEMP_DIR"
-  mkdir -p "$UPDATE_DIR"
-  chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR" "$TEMP_DIR" "$UPDATE_DIR"
+  mkdir -p "$DATA_DIR" "$TEMP_DIR" "$UPDATE_DIR" "$APPLY_DIR"
+  chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR" "$TEMP_DIR" "$UPDATE_DIR" "$APPLY_DIR"
 
   systemctl daemon-reload
   systemctl restart "$SERVICE_NAME"
@@ -520,7 +529,7 @@ RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=-$DATA_DIR -$TEMP_DIR -$UPDATE_DIR
+ReadWritePaths=-$DATA_DIR -$TEMP_DIR -$UPDATE_DIR -$APPLY_DIR
 
 [Install]
 WantedBy=multi-user.target
@@ -534,16 +543,15 @@ cmd_install_service() {
   ensure_service_user
 
   log "Creating directories"
-  mkdir -p "$APP_DIR" "$DATA_DIR" "$TEMP_DIR" "$UPDATE_DIR"
-  chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR" "$TEMP_DIR" "$UPDATE_DIR"
+  mkdir -p "$APP_DIR" "$DATA_DIR" "$TEMP_DIR" "$UPDATE_DIR" "$APPLY_DIR"
+  chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR" "$TEMP_DIR" "$UPDATE_DIR" "$APPLY_DIR"
 
   cmd_publish
   cmd_extract_package
   write_env_file
   write_service_file
 
-  chown -R root:root "$APP_DIR"
-  chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR" "$TEMP_DIR" "$UPDATE_DIR"
+  chown -R "$SERVICE_USER:$SERVICE_GROUP" "$APP_DIR" "$DATA_DIR" "$TEMP_DIR" "$UPDATE_DIR" "$APPLY_DIR"
 
   log "Enabling service"
   systemctl daemon-reload
@@ -608,9 +616,9 @@ cmd_uninstall() {
 
   if [ "${REMOVE_DATA:-0}" = "1" ]; then
     log "Removing app, data, and temp directories"
-    rm -rf "$APP_DIR" "$DATA_DIR" "$TEMP_DIR" "$UPDATE_DIR"
+    rm -rf "$APP_DIR" "$DATA_DIR" "$TEMP_DIR" "$UPDATE_DIR" "$APPLY_DIR"
   else
-    log "Keeping $APP_DIR, $DATA_DIR, $TEMP_DIR, and $UPDATE_DIR. Set REMOVE_DATA=1 to remove them."
+    log "Keeping $APP_DIR, $DATA_DIR, $TEMP_DIR, $UPDATE_DIR, and $APPLY_DIR. Set REMOVE_DATA=1 to remove them."
   fi
 }
 

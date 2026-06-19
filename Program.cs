@@ -37,7 +37,7 @@ builder.Services.AddCors(options =>
         }
 
         policy
-            .WithMethods("GET", "POST", "HEAD", "PATCH", "OPTIONS")
+            .WithMethods("GET", "POST", "HEAD", "PATCH", "DELETE", "OPTIONS")
             .WithHeaders(
                 "Authorization",
                 "X-Api-Key",

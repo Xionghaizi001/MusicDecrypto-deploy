@@ -34,13 +34,15 @@ internal static class UpdatePage
       font-weight: 650;
     }
 
-    form {
+    form,
+    section {
       display: grid;
       gap: 18px;
       background: #ffffff;
       border: 1px solid #deded8;
       border-radius: 8px;
       padding: 22px;
+      margin-bottom: 18px;
     }
 
     label {
@@ -79,9 +81,35 @@ internal static class UpdatePage
       color: white;
     }
 
+    button.secondary {
+      background: #38414a;
+    }
+
+    button.danger {
+      background: #9b2f2f;
+    }
+
     button:disabled {
       opacity: .55;
       cursor: not-allowed;
+    }
+
+    .batch {
+      display: grid;
+      gap: 10px;
+      border-top: 1px solid #deded8;
+      padding-top: 14px;
+    }
+
+    .batch:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .meta {
+      color: #62665f;
+      font-size: 13px;
+      word-break: break-word;
     }
 
     output {
@@ -99,8 +127,10 @@ internal static class UpdatePage
 
     @media (prefers-color-scheme: dark) {
       body { background: #111312; color: #eeeeea; }
-      form { background: #191c1b; border-color: #333835; }
+      form, section { background: #191c1b; border-color: #333835; }
       input { background: #111312; border-color: #444a47; }
+      .batch { border-color: #333835; }
+      .meta { color: #a5aaa4; }
     }
   </style>
 </head>
@@ -114,12 +144,16 @@ internal static class UpdatePage
       </label>
       <label>
         Files
-        <input id="files" type="file" multiple webkitdirectory>
+        <input id="files" type="file" multiple>
       </label>
       <div class="row">
         <button id="submit" type="submit">Upload</button>
+        <button id="refresh" class="secondary" type="button">Refresh Batches</button>
       </div>
     </form>
+    <section>
+      <div id="batches" class="meta">No batches loaded.</div>
+    </section>
     <output id="status">Ready.</output>
   </main>
   <script>
@@ -127,9 +161,62 @@ internal static class UpdatePage
     const keyInput = document.getElementById('api-key');
     const fileInput = document.getElementById('files');
     const submit = document.getElementById('submit');
+    const refresh = document.getElementById('refresh');
+    const batches = document.getElementById('batches');
     const status = document.getElementById('status');
 
     const reverse = value => Array.from(value).reverse().join('');
+    const authHeaders = () => ({ 'X-Update-Key': reverse(keyInput.value) });
+
+    async function request(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: {
+          ...authHeaders(),
+          ...(options.headers || {})
+        }
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}\n${text}`);
+      }
+      return text ? JSON.parse(text) : null;
+    }
+
+    function formatBytes(value) {
+      if (value < 1024) return `${value} B`;
+      if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+      return `${(value / 1024 / 1024).toFixed(1)} MB`;
+    }
+
+    async function loadBatches() {
+      batches.textContent = 'Loading...';
+      try {
+        const items = await request('/update/batches');
+        if (!items.length) {
+          batches.textContent = 'No update batches.';
+          return;
+        }
+
+        batches.innerHTML = '';
+        for (const item of items) {
+          const element = document.createElement('div');
+          element.className = 'batch';
+          element.innerHTML = `
+            <strong>${item.batchId}</strong>
+            <div class="meta">${item.fileCount} files · ${formatBytes(item.totalBytes)} · manifest: ${item.hasManifest ? 'yes' : 'no'}</div>
+            <div class="meta">${item.directory}</div>
+            <div class="row">
+              <button type="button" data-action="apply" data-id="${item.batchId}">Apply</button>
+              <button type="button" class="danger" data-action="delete" data-id="${item.batchId}">Delete</button>
+            </div>
+          `;
+          batches.appendChild(element);
+        }
+      } catch (error) {
+        batches.textContent = error instanceof Error ? error.message : String(error);
+      }
+    }
 
     form.addEventListener('submit', async event => {
       event.preventDefault();
@@ -150,7 +237,7 @@ internal static class UpdatePage
       try {
         const response = await fetch('/update', {
           method: 'POST',
-          headers: { 'X-Update-Key': reverse(keyInput.value) },
+          headers: authHeaders(),
           body
         });
 
@@ -162,10 +249,38 @@ internal static class UpdatePage
 
         const result = JSON.parse(text);
         status.textContent = JSON.stringify(result, null, 2);
+        await loadBatches();
       } catch (error) {
         status.textContent = error instanceof Error ? error.message : String(error);
       } finally {
         submit.disabled = false;
+      }
+    });
+
+    refresh.addEventListener('click', loadBatches);
+
+    batches.addEventListener('click', async event => {
+      const button = event.target instanceof HTMLButtonElement ? event.target : null;
+      if (!button) return;
+
+      const id = button.dataset.id;
+      const action = button.dataset.action;
+      if (!id || !action) return;
+
+      button.disabled = true;
+      try {
+        if (action === 'apply') {
+          const result = await request(`/update/${encodeURIComponent(id)}/apply`, { method: 'POST' });
+          status.textContent = JSON.stringify(result, null, 2);
+        } else if (action === 'delete') {
+          const result = await request(`/update/${encodeURIComponent(id)}`, { method: 'DELETE' });
+          status.textContent = JSON.stringify(result, null, 2);
+        }
+        await loadBatches();
+      } catch (error) {
+        status.textContent = error instanceof Error ? error.message : String(error);
+      } finally {
+        button.disabled = false;
       }
     });
   </script>
