@@ -55,6 +55,7 @@ Common settings:
 
 Examples:
   sudo API_KEY='replace-with-secret' PORT=5080 $0 install-service
+  sudo PORT=5080 $0 install-service
   $0 api-check
   sudo REMOVE_DATA=1 $0 uninstall
 USAGE
@@ -100,6 +101,15 @@ service_env() {
     # shellcheck disable=SC1090
     set -a && . "$ENV_FILE" && set +a
   fi
+}
+
+generate_api_key() {
+  if have openssl; then
+    openssl rand -hex 16
+    return
+  fi
+
+  od -An -N16 -tx1 /dev/urandom | tr -d ' \n'
 }
 
 cmd_show_config() {
@@ -210,6 +220,13 @@ ensure_service_user() {
 }
 
 write_env_file() {
+  local effective_api_key="$API_KEY"
+  if [ -z "$effective_api_key" ]; then
+    effective_api_key="$(generate_api_key)"
+    log "API_KEY was not provided; generated a random 32-character API key."
+    log "Generated API key: $effective_api_key"
+  fi
+
   log "Writing $ENV_FILE"
   cat >"$ENV_FILE" <<ENV
 ASPNETCORE_ENVIRONMENT=Production
@@ -219,7 +236,7 @@ Kestrel__Endpoints__Http__Url=http://$BIND_HOST:$PORT
 MusicDecrypto__StorageRoot=$DATA_DIR
 MusicDecrypto__TempRoot=$TEMP_DIR
 MusicDecrypto__DecryptoExecutablePath=$PACKAGE_DIR/musicdecrypto
-MusicDecrypto__ApiKey=$API_KEY
+MusicDecrypto__ApiKey=$effective_api_key
 MusicDecrypto__ForceOverwrite=$FORCE_OVERWRITE
 MusicDecrypto__ExtensiveDetection=$EXTENSIVE_DETECTION
 ENV
