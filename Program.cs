@@ -19,12 +19,50 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
+builder.Services.AddCors(options =>
+{
+    var allowedOrigins = builder.Configuration
+        .GetSection("MusicDecrypto:AllowedOrigins")
+        .GetChildren()
+        .Select(origin => origin.Value)
+        .Where(origin => !string.IsNullOrWhiteSpace(origin))
+        .Cast<string>()
+        .ToArray();
+
+    options.AddPolicy("Frontend", policy =>
+    {
+        if (allowedOrigins.Length > 0)
+        {
+            policy.WithOrigins(allowedOrigins);
+        }
+
+        policy
+            .WithMethods("GET", "POST", "HEAD", "PATCH", "OPTIONS")
+            .WithHeaders(
+                "Authorization",
+                "X-Api-Key",
+                "Content-Type",
+                "Tus-Resumable",
+                "Upload-Length",
+                "Upload-Metadata",
+                "Upload-Offset",
+                "Upload-Defer-Length")
+            .WithExposedHeaders(
+                "Location",
+                "Tus-Resumable",
+                "Upload-Offset",
+                "Upload-Length",
+                "Upload-Metadata",
+                "Upload-Expires");
+    });
+});
 builder.Services.AddSingleton<JobStore>();
 builder.Services.AddSingleton<JobQueue>();
 builder.Services.AddHostedService<DecryptionWorker>();
 
 var app = builder.Build();
 
+app.UseCors("Frontend");
 app.UseMiddleware<ApiKeyMiddleware>();
 
 app.MapGet("/healthz", () => Results.Ok(new

@@ -23,6 +23,7 @@ TEMP_DIR="${TEMP_DIR:-/var/tmp/musicdecrypto}"
 BIND_HOST="${BIND_HOST:-127.0.0.1}"
 PORT="${PORT:-5080}"
 API_KEY="${API_KEY:-}"
+ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-true}"
 EXTENSIVE_DETECTION="${EXTENSIVE_DETECTION:-false}"
 PACKAGE_ARCHIVE="${PACKAGE_ARCHIVE:-$PROJECT_DIR/deploy/package/musicdecrypto-linux-x64.tar.gz}"
@@ -64,6 +65,7 @@ Common settings:
   BIND_HOST=$BIND_HOST
   PORT=$PORT
   API_KEY=<secret>
+  ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
   PACKAGE_ARCHIVE=$PACKAGE_ARCHIVE
   DOTNET_CHANNEL=$DOTNET_CHANNEL
   DOTNET_INSTALL_DIR=$DOTNET_INSTALL_DIR
@@ -136,6 +138,26 @@ generate_api_key() {
   od -An -N16 -tx1 /dev/urandom | tr -d ' \n'
 }
 
+append_allowed_origins() {
+  local env_file="$1"
+  local index=0
+  local origin
+
+  if [ -z "$ALLOWED_ORIGINS" ]; then
+    return
+  fi
+
+  IFS=',' read -ra origins <<<"$ALLOWED_ORIGINS"
+  for origin in "${origins[@]}"; do
+    origin="${origin#"${origin%%[![:space:]]*}"}"
+    origin="${origin%"${origin##*[![:space:]]}"}"
+    if [ -n "$origin" ]; then
+      printf 'MusicDecrypto__AllowedOrigins__%s=%s\n' "$index" "$origin" >>"$env_file"
+      index=$((index + 1))
+    fi
+  done
+}
+
 cmd_show_config() {
   cat <<CONFIG
 SERVICE_NAME=$SERVICE_NAME
@@ -152,6 +174,7 @@ ENV_FILE=$ENV_FILE
 SERVICE_FILE=$SERVICE_FILE
 FORCE_OVERWRITE=$FORCE_OVERWRITE
 EXTENSIVE_DETECTION=$EXTENSIVE_DETECTION
+ALLOWED_ORIGINS=$ALLOWED_ORIGINS
 DOTNET_CHANNEL=$DOTNET_CHANNEL
 DOTNET_INSTALL_DIR=$DOTNET_INSTALL_DIR
 DOTNET_INSTALL_SCRIPT_URL=$DOTNET_INSTALL_SCRIPT_URL
@@ -300,6 +323,7 @@ MusicDecrypto__ApiKey=$effective_api_key
 MusicDecrypto__ForceOverwrite=$FORCE_OVERWRITE
 MusicDecrypto__ExtensiveDetection=$EXTENSIVE_DETECTION
 ENV
+  append_allowed_origins "$ENV_FILE"
   chmod 600 "$ENV_FILE"
 }
 

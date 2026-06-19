@@ -42,6 +42,13 @@ The CLI package is stored compressed in `deploy/package/musicdecrypto-linux-x64.
 PACKAGE_DIR=package scripts/manage.sh extract-package
 ```
 
+The extracted root `package/` directory is ignored by git. Keep source control on the compressed archive under `deploy/package/`.
+
+For frontend development, local CORS is enabled for:
+
+- `http://localhost:5173`
+- `http://127.0.0.1:5173`
+
 Upload a file with the included tus-compatible test script:
 
 ```bash
@@ -99,6 +106,7 @@ sudo \
   PORT=5081 \
   DATA_DIR=/srv/musicdecrypto/data \
   TEMP_DIR=/srv/musicdecrypto/tmp \
+  ALLOWED_ORIGINS=https://your-frontend.example.com \
   API_KEY='replace-with-a-long-random-secret' \
   scripts/manage.sh install-service
 ```

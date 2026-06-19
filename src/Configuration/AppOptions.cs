@@ -8,4 +8,5 @@ internal sealed class AppOptions
     public string? ApiKey { get; set; }
     public bool ForceOverwrite { get; set; } = true;
     public bool ExtensiveDetection { get; set; }
+    public string[] AllowedOrigins { get; set; } = [];
 }
