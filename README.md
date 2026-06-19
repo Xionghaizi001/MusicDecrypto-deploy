@@ -120,9 +120,13 @@ sudo scripts/manage.sh restart
 scripts/manage.sh status
 scripts/manage.sh api-check
 scripts/manage.sh logs
+sudo PORT=5082 scripts/manage.sh configure
+sudo ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com scripts/manage.sh configure
 sudo scripts/manage.sh reinstall-deps
 sudo scripts/manage.sh uninstall
 ```
+
+`configure` updates the installed environment file, rewrites the systemd unit when paths or ports change, reloads systemd, and restarts the service. Variables not provided on the command line are kept from the existing installed configuration.
 
 To remove service files and data:
 

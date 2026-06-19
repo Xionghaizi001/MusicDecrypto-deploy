@@ -13,6 +13,21 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+PROVIDED_SERVICE_NAME="${SERVICE_NAME+x}"
+PROVIDED_SERVICE_USER="${SERVICE_USER+x}"
+PROVIDED_SERVICE_GROUP="${SERVICE_GROUP+x}"
+PROVIDED_APP_DIR="${APP_DIR+x}"
+PROVIDED_PUBLISH_DIR="${PUBLISH_DIR+x}"
+PROVIDED_DATA_DIR="${DATA_DIR+x}"
+PROVIDED_TEMP_DIR="${TEMP_DIR+x}"
+PROVIDED_BIND_HOST="${BIND_HOST+x}"
+PROVIDED_PORT="${PORT+x}"
+PROVIDED_API_KEY="${API_KEY+x}"
+PROVIDED_ALLOWED_ORIGINS="${ALLOWED_ORIGINS+x}"
+PROVIDED_FORCE_OVERWRITE="${FORCE_OVERWRITE+x}"
+PROVIDED_EXTENSIVE_DETECTION="${EXTENSIVE_DETECTION+x}"
+PROVIDED_PACKAGE_DIR="${PACKAGE_DIR+x}"
+
 SERVICE_NAME="${SERVICE_NAME:-musicdecrypto-backend}"
 SERVICE_USER="${SERVICE_USER:-musicdecrypto}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
@@ -54,6 +69,7 @@ Runtime commands:
   logs             Follow service logs
 
 Maintenance commands:
+  configure        Update runtime settings and restart the service
   reinstall-deps   Re-run dependency installation
   uninstall        Stop and remove the systemd service; keeps data by default
   show-config      Print resolved configuration
@@ -74,6 +90,7 @@ Common settings:
 Examples:
   sudo API_KEY='replace-with-secret' PORT=5080 $0 install-service
   sudo PORT=5080 $0 install-service
+  sudo PORT=5081 ALLOWED_ORIGINS=https://app.example.com $0 configure
   $0 api-check
   sudo REMOVE_DATA=1 $0 uninstall
 USAGE
@@ -158,7 +175,131 @@ append_allowed_origins() {
   done
 }
 
+env_value() {
+  local key="$1"
+  local file="${2:-$ENV_FILE}"
+
+  if [ ! -f "$file" ]; then
+    return
+  fi
+
+  awk -v key="$key" -F= '$1 == key {print substr($0, index($0, "=") + 1)}' "$file" | tail -n 1
+}
+
+configured_bind_host() {
+  local url
+  url="$(env_value Kestrel__Endpoints__Http__Url || true)"
+  url="${url#http://}"
+  url="${url#https://}"
+  url="${url%%/*}"
+  url="${url%:*}"
+
+  if [ -n "$url" ]; then
+    printf '%s\n' "$url"
+  fi
+}
+
+configured_port() {
+  local url
+  url="$(env_value Kestrel__Endpoints__Http__Url || true)"
+  url="${url#http://}"
+  url="${url#https://}"
+  url="${url%%/*}"
+
+  if [[ "$url" == *:* ]]; then
+    printf '%s\n' "${url##*:}"
+  fi
+}
+
+configured_allowed_origins() {
+  local file="${1:-$ENV_FILE}"
+
+  if [ ! -f "$file" ]; then
+    return
+  fi
+
+  awk -F= '
+    $1 ~ /^MusicDecrypto__AllowedOrigins__[0-9]+$/ {
+      values[$1] = substr($0, index($0, "=") + 1)
+    }
+    END {
+      for (i = 0; ; i++) {
+        key = "MusicDecrypto__AllowedOrigins__" i
+        if (!(key in values)) {
+          break
+        }
+        if (i > 0) {
+          printf ","
+        }
+        printf "%s", values[key]
+      }
+    }
+  ' "$file"
+}
+
+was_provided() {
+  local name="$1"
+  local flag="PROVIDED_$name"
+  [ -n "${!flag:-}" ]
+}
+
+resolve_runtime_config() {
+  if [ ! -f "$ENV_FILE" ]; then
+    return
+  fi
+
+  if ! was_provided BIND_HOST; then
+    BIND_HOST="$(env_value MUSICDECRYPTO_MANAGE_BIND_HOST || true)"
+    BIND_HOST="${BIND_HOST:-$(configured_bind_host || true)}"
+    BIND_HOST="${BIND_HOST:-127.0.0.1}"
+  fi
+
+  if ! was_provided PORT; then
+    PORT="$(env_value MUSICDECRYPTO_MANAGE_PORT || true)"
+    PORT="${PORT:-$(configured_port || true)}"
+    PORT="${PORT:-5080}"
+  fi
+
+  if ! was_provided DATA_DIR; then
+    DATA_DIR="$(env_value MusicDecrypto__StorageRoot || true)"
+    DATA_DIR="${DATA_DIR:-/var/lib/musicdecrypto}"
+  fi
+
+  if ! was_provided TEMP_DIR; then
+    TEMP_DIR="$(env_value MusicDecrypto__TempRoot || true)"
+    TEMP_DIR="${TEMP_DIR:-/var/tmp/musicdecrypto}"
+  fi
+
+  if ! was_provided PACKAGE_DIR; then
+    local existing_executable
+    existing_executable="$(env_value MusicDecrypto__DecryptoExecutablePath || true)"
+    if [ -n "$existing_executable" ]; then
+      PACKAGE_DIR="$(dirname "$existing_executable")"
+    fi
+  fi
+
+  if ! was_provided API_KEY; then
+    API_KEY="$(env_value MusicDecrypto__ApiKey || true)"
+  fi
+
+  if ! was_provided FORCE_OVERWRITE; then
+    FORCE_OVERWRITE="$(env_value MusicDecrypto__ForceOverwrite || true)"
+    FORCE_OVERWRITE="${FORCE_OVERWRITE:-true}"
+  fi
+
+  if ! was_provided EXTENSIVE_DETECTION; then
+    EXTENSIVE_DETECTION="$(env_value MusicDecrypto__ExtensiveDetection || true)"
+    EXTENSIVE_DETECTION="${EXTENSIVE_DETECTION:-false}"
+  fi
+
+  if ! was_provided ALLOWED_ORIGINS; then
+    ALLOWED_ORIGINS="$(configured_allowed_origins || true)"
+  fi
+}
+
 cmd_show_config() {
+  resolve_runtime_config
+
   cat <<CONFIG
 SERVICE_NAME=$SERVICE_NAME
 SERVICE_USER=$SERVICE_USER
@@ -294,6 +435,8 @@ ensure_service_user() {
 }
 
 write_env_file() {
+  resolve_runtime_config
+
   local effective_api_key="$API_KEY"
   if [ -z "$effective_api_key" ] && [ -f "$ENV_FILE" ]; then
     local existing_api_key
@@ -325,6 +468,24 @@ MusicDecrypto__ExtensiveDetection=$EXTENSIVE_DETECTION
 ENV
   append_allowed_origins "$ENV_FILE"
   chmod 600 "$ENV_FILE"
+}
+
+cmd_configure() {
+  require_root
+
+  if [ ! -f "$ENV_FILE" ]; then
+    fail "environment file not found: $ENV_FILE; run install-service first"
+  fi
+
+  log "Updating runtime configuration"
+  write_env_file
+  write_service_file
+  mkdir -p "$DATA_DIR" "$TEMP_DIR"
+  chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR" "$TEMP_DIR"
+
+  systemctl daemon-reload
+  systemctl restart "$SERVICE_NAME"
+  systemctl --no-pager --full status "$SERVICE_NAME"
 }
 
 write_service_file() {
@@ -449,6 +610,7 @@ case "$command" in
   publish) cmd_publish ;;
   extract-package) cmd_extract_package ;;
   install-service) cmd_install_service ;;
+  configure) cmd_configure ;;
   start) cmd_start ;;
   stop) cmd_stop ;;
   restart) cmd_restart ;;
