@@ -137,11 +137,6 @@ dotnet_cmd() {
     return
   fi
 
-  if [ -x /tmp/dotnet/dotnet ]; then
-    printf '%s\n' /tmp/dotnet/dotnet
-    return
-  fi
-
   true
 }
 

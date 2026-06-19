@@ -57,12 +57,7 @@ dotnet_cmd() {
     return
   fi
 
-  if [ -x /tmp/dotnet/dotnet ]; then
-    printf '%s\n' /tmp/dotnet/dotnet
-    return
-  fi
-
-  fail "dotnet was not found"
+  fail "dotnet was not found. Install the .NET SDK normally or set DOTNET_BIN=/path/to/dotnet."
 }
 
 ensure_package() {
@@ -81,8 +76,6 @@ cmd_server() {
   dotnet_path="$(dotnet_cmd)"
 
   log "Starting backend on $DEV_URL"
-  DOTNET_ROOT="$(dirname "$dotnet_path")" \
-  DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-/tmp/dotnet-cli-home}" \
   MusicDecrypto__StorageRoot="$DEV_STORAGE_ROOT" \
   MusicDecrypto__TempRoot="$DEV_TEMP_ROOT" \
   MusicDecrypto__UpdateRoot="$DEV_UPDATE_ROOT" \

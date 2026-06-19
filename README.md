@@ -71,6 +71,8 @@ scripts/dev.sh pack --git HEAD~1..HEAD -o /tmp/update.zip
 scripts/dev.sh pack --files Program.cs src/Updates/UpdateEndpoints.cs -o /tmp/update.zip
 ```
 
+`scripts/dev.sh server` uses the normally installed `dotnet` from `PATH`. If it is installed in a custom location, run it with `DOTNET_BIN=/path/to/dotnet`.
+
 The update package format is a zip with this root structure:
 
 ```text
