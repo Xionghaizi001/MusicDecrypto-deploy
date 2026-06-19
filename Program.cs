@@ -41,6 +41,7 @@ builder.Services.AddCors(options =>
             .WithHeaders(
                 "Authorization",
                 "X-Api-Key",
+                "X-Update-Key",
                 "Content-Type",
                 "Tus-Resumable",
                 "Upload-Length",
@@ -64,6 +65,8 @@ var app = builder.Build();
 
 app.UseCors("Frontend");
 app.UseMiddleware<ApiKeyMiddleware>();
+
+app.MapUpdateEndpoints();
 
 app.MapGet("/healthz", () => Results.Ok(new
 {

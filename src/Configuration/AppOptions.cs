@@ -4,6 +4,7 @@ internal sealed class AppOptions
 {
     public string StorageRoot { get; set; } = "data";
     public string TempRoot { get; set; } = "data/tmp";
+    public string UpdateRoot { get; set; } = "data/updates";
     public string DecryptoExecutablePath { get; set; } = "package/musicdecrypto";
     public string? ApiKey { get; set; }
     public bool ForceOverwrite { get; set; } = true;

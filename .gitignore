@@ -2,6 +2,7 @@ bin/
 obj/
 data/
 data/tmp/
+data/updates/
 publish/
 /package/
 *.user
