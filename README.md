@@ -86,12 +86,15 @@ The manifest format is `musicdecrypto.update.v1` and lists each target path, pac
 
 These commands assume Ubuntu/Debian. The default installation uses:
 
-- app directory: `/opt/musicdecrypto/backend`
+- app directory: this checked-out `backend` directory
+- service user: the owner of this checked-out `backend` directory
 - data directory: `/var/lib/musicdecrypto`
 - temporary tus directory: `/var/tmp/musicdecrypto`
 - update upload directory: `/var/lib/musicdecrypto/updates`
-- update apply directory: `/opt/musicdecrypto/backend`
+- update apply directory: the app directory
 - service port: `127.0.0.1:5080`
+
+This keeps the runtime directory and `/update` apply target aligned when installing from a cloned repository. If you prefer a traditional `/opt` install, set `APP_DIR=/opt/musicdecrypto/backend`; `PUBLISH_DIR`, `PACKAGE_DIR`, and `APPLY_DIR` will follow that app directory unless you override them explicitly.
 
 Run an environment check:
 
@@ -131,11 +134,11 @@ Override settings with environment variables when installing:
 
 ```bash
 sudo \
+  APP_DIR=/opt/musicdecrypto/backend \
   PORT=5081 \
   DATA_DIR=/srv/musicdecrypto/data \
   TEMP_DIR=/srv/musicdecrypto/tmp \
   UPDATE_DIR=/srv/musicdecrypto/updates \
-  APPLY_DIR=/opt/musicdecrypto/backend \
   ALLOWED_ORIGINS=https://your-frontend.example.com \
   API_KEY='replace-with-a-long-random-secret' \
   scripts/manage.sh install-service
@@ -151,8 +154,8 @@ scripts/manage.sh status
 scripts/manage.sh api-check
 scripts/manage.sh logs
 sudo PORT=5082 scripts/manage.sh configure
+sudo APP_DIR=/opt/musicdecrypto/backend scripts/manage.sh configure
 sudo UPDATE_DIR=/srv/musicdecrypto/updates scripts/manage.sh configure
-sudo APPLY_DIR=/opt/musicdecrypto/backend scripts/manage.sh configure
 sudo ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com scripts/manage.sh configure
 sudo scripts/manage.sh reinstall-deps
 sudo scripts/manage.sh uninstall
@@ -183,6 +186,6 @@ Edit `server_name example.com;` before enabling HTTPS.
 - Uploaded files are copied into `StorageRoot/uploads`.
 - Decrypted files are written under `StorageRoot/outputs/{jobId}`.
 - Files uploaded through `/update` are stored under `UpdateRoot/{batchId}`.
-- Applying a batch copies manifest-listed files into `UpdateApplyRoot`; it does not automatically restart the service.
+- Applying a batch copies manifest-listed files into `UpdateApplyRoot`, which defaults to the app directory used by the systemd service. It does not automatically restart the service.
 - Job state is stored in `StorageRoot/state/jobs.json`.
 - The current worker processes jobs one at a time, which is conservative for CPU and disk usage on a small VPS.

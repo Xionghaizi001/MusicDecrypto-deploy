@@ -13,6 +13,23 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+default_service_user() {
+  local owner
+  owner="$(stat -c '%U' "$PROJECT_DIR" 2>/dev/null || true)"
+  if [ -n "$owner" ] && [ "$owner" != "root" ]; then
+    printf '%s\n' "$owner"
+  else
+    printf 'musicdecrypto\n'
+  fi
+}
+
+default_service_group() {
+  local user="$1"
+  id -gn "$user" 2>/dev/null || printf '%s\n' "$user"
+}
+
+DEFAULT_SERVICE_USER="$(default_service_user)"
+
 PROVIDED_SERVICE_NAME="${SERVICE_NAME+x}"
 PROVIDED_SERVICE_USER="${SERVICE_USER+x}"
 PROVIDED_SERVICE_GROUP="${SERVICE_GROUP+x}"
@@ -31,9 +48,9 @@ PROVIDED_EXTENSIVE_DETECTION="${EXTENSIVE_DETECTION+x}"
 PROVIDED_PACKAGE_DIR="${PACKAGE_DIR+x}"
 
 SERVICE_NAME="${SERVICE_NAME:-musicdecrypto-backend}"
-SERVICE_USER="${SERVICE_USER:-musicdecrypto}"
-SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
-APP_DIR="${APP_DIR:-/opt/musicdecrypto/backend}"
+SERVICE_USER="${SERVICE_USER:-$DEFAULT_SERVICE_USER}"
+SERVICE_GROUP="${SERVICE_GROUP:-$(default_service_group "$SERVICE_USER")}"
+APP_DIR="${APP_DIR:-$PROJECT_DIR}"
 PUBLISH_DIR="${PUBLISH_DIR:-$APP_DIR/publish}"
 DATA_DIR="${DATA_DIR:-/var/lib/musicdecrypto}"
 TEMP_DIR="${TEMP_DIR:-/var/tmp/musicdecrypto}"
@@ -212,6 +229,15 @@ configured_port() {
   fi
 }
 
+configured_service_value() {
+  local key="$1"
+  if [ ! -f "$SERVICE_FILE" ]; then
+    return
+  fi
+
+  awk -F= -v key="$key" '$1 == key {print substr($0, index($0, "=") + 1)}' "$SERVICE_FILE" | tail -n 1
+}
+
 configured_allowed_origins() {
   local file="${1:-$ENV_FILE}"
 
@@ -249,6 +275,16 @@ resolve_runtime_config() {
     return
   fi
 
+  if ! was_provided SERVICE_USER; then
+    SERVICE_USER="$(configured_service_value User || true)"
+    SERVICE_USER="${SERVICE_USER:-$DEFAULT_SERVICE_USER}"
+  fi
+
+  if ! was_provided SERVICE_GROUP; then
+    SERVICE_GROUP="$(configured_service_value Group || true)"
+    SERVICE_GROUP="${SERVICE_GROUP:-$(default_service_group "$SERVICE_USER")}"
+  fi
+
   if ! was_provided BIND_HOST; then
     BIND_HOST="$(env_value MUSICDECRYPTO_MANAGE_BIND_HOST || true)"
     BIND_HOST="${BIND_HOST:-$(configured_bind_host || true)}"
@@ -259,6 +295,17 @@ resolve_runtime_config() {
     PORT="$(env_value MUSICDECRYPTO_MANAGE_PORT || true)"
     PORT="${PORT:-$(configured_port || true)}"
     PORT="${PORT:-5080}"
+  fi
+
+  if ! was_provided APP_DIR; then
+    APP_DIR="$(env_value MUSICDECRYPTO_MANAGE_APP_DIR || true)"
+    APP_DIR="${APP_DIR:-$(env_value MusicDecrypto__UpdateApplyRoot || true)}"
+    APP_DIR="${APP_DIR:-$PROJECT_DIR}"
+  fi
+
+  if ! was_provided PUBLISH_DIR; then
+    PUBLISH_DIR="$(env_value MUSICDECRYPTO_MANAGE_PUBLISH_DIR || true)"
+    PUBLISH_DIR="${PUBLISH_DIR:-$APP_DIR/publish}"
   fi
 
   if ! was_provided DATA_DIR; then
@@ -282,11 +329,13 @@ resolve_runtime_config() {
   fi
 
   if ! was_provided PACKAGE_DIR; then
+    PACKAGE_DIR="$(env_value MUSICDECRYPTO_MANAGE_PACKAGE_DIR || true)"
     local existing_executable
     existing_executable="$(env_value MusicDecrypto__DecryptoExecutablePath || true)"
-    if [ -n "$existing_executable" ]; then
+    if [ -z "$PACKAGE_DIR" ] && [ -n "$existing_executable" ]; then
       PACKAGE_DIR="$(dirname "$existing_executable")"
     fi
+    PACKAGE_DIR="${PACKAGE_DIR:-$APP_DIR/package}"
   fi
 
   if ! was_provided API_KEY; then
@@ -471,6 +520,9 @@ write_env_file() {
 ASPNETCORE_ENVIRONMENT=Production
 MUSICDECRYPTO_MANAGE_BIND_HOST=$BIND_HOST
 MUSICDECRYPTO_MANAGE_PORT=$PORT
+MUSICDECRYPTO_MANAGE_APP_DIR=$APP_DIR
+MUSICDECRYPTO_MANAGE_PUBLISH_DIR=$PUBLISH_DIR
+MUSICDECRYPTO_MANAGE_PACKAGE_DIR=$PACKAGE_DIR
 Kestrel__Endpoints__Http__Url=http://$BIND_HOST:$PORT
 MusicDecrypto__StorageRoot=$DATA_DIR
 MusicDecrypto__TempRoot=$TEMP_DIR
