@@ -43,6 +43,14 @@ internal sealed class JobStore
             .ToArray();
     }
 
+    public IReadOnlyCollection<JobRecord> GetFailed()
+    {
+        return _jobs.Values
+            .Where(job => job.Status == JobStatus.Failed)
+            .OrderBy(job => job.CreatedAt)
+            .ToArray();
+    }
+
     public Task UpsertAsync(JobRecord job, CancellationToken cancellationToken)
     {
         _jobs[job.Id] = job;

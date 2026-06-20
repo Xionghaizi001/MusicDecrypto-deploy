@@ -13,6 +13,7 @@ internal sealed class DecryptionWorker(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await RepairCompletedJobsAsync(stoppingToken);
         await RequeuePendingJobsAsync(stoppingToken);
 
         await foreach (var jobId in queue.ReadAllAsync(stoppingToken))
@@ -30,6 +31,44 @@ internal sealed class DecryptionWorker(
                 logger.LogError(ex, "Unhandled error while processing job {JobId}", jobId);
                 await jobs.MarkFailedAsync(jobId, ex.Message, CancellationToken.None);
             }
+        }
+    }
+
+    private async Task RepairCompletedJobsAsync(CancellationToken cancellationToken)
+    {
+        var paths = AppPaths.From(options.Value, environment.ContentRootPath);
+
+        foreach (var job in jobs.GetFailed())
+        {
+            if (!string.Equals(job.Error, "Decrypto finished but no output file was produced.", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var outputDirectory = Path.Combine(paths.Outputs, job.Id);
+            var outputFile = FindExistingOutputFile(job, outputDirectory);
+            if (outputFile is null)
+            {
+                logger.LogInformation(
+                    "Failed job {JobId} was checked for existing output, but no recoverable file was found. OutputDirectory={OutputDirectory}, InputDirectory={InputDirectory}",
+                    job.Id,
+                    outputDirectory,
+                    Path.GetDirectoryName(job.InputPath));
+                continue;
+            }
+
+            var log = TrimLog(
+                job.Log ?? string.Empty,
+                $"Recovered existing output file on service startup: {outputFile.Path}",
+                $"OutputSource: {outputFile.Source}");
+
+            await jobs.MarkCompletedAsync(job.Id, outputFile.Path, log, cancellationToken);
+            logger.LogInformation(
+                "Recovered failed job {JobId} with existing output file. OutputPath={OutputPath}, OutputSource={OutputSource}, OutputBytes={OutputBytes}",
+                job.Id,
+                outputFile.Path,
+                outputFile.Source,
+                outputFile.Size);
         }
     }
 
@@ -98,6 +137,8 @@ internal sealed class DecryptionWorker(
 
         var outputDirectory = Path.Combine(paths.Outputs, jobId);
         Directory.CreateDirectory(outputDirectory);
+        var cliOutputArgument = Path.Combine(outputDirectory, "_output");
+        Directory.CreateDirectory(cliOutputArgument);
 
         var startInfo = new ProcessStartInfo
         {
@@ -109,7 +150,7 @@ internal sealed class DecryptionWorker(
         };
         startInfo.ArgumentList.Add(job.InputPath);
         startInfo.ArgumentList.Add("--output");
-        startInfo.ArgumentList.Add(outputDirectory);
+        startInfo.ArgumentList.Add(cliOutputArgument);
         if (options.Value.ForceOverwrite)
         {
             startInfo.ArgumentList.Add("--force-overwrite");
@@ -164,39 +205,40 @@ internal sealed class DecryptionWorker(
             Encoding.UTF8.GetByteCount(result.Stdout),
             Encoding.UTF8.GetByteCount(result.Stderr));
 
-        var outputFile = Directory.EnumerateFiles(outputDirectory, "*", SearchOption.TopDirectoryOnly)
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault();
+        var outputFile = FindOutputFile(job, outputDirectory, result.StartedAtUtc);
 
         if (outputFile is null)
         {
             var error = "Decrypto finished but no output file was produced.";
             logger.LogError(
-                "Job {JobId} failed after successful process exit: {Error} OutputDirectory={OutputDirectory}",
+                "Job {JobId} failed after successful process exit: {Error} OutputDirectory={OutputDirectory}, InputDirectory={InputDirectory}",
                 jobId,
                 error,
-                outputDirectory);
+                outputDirectory,
+                Path.GetDirectoryName(job.InputPath));
             await jobs.MarkFailedAsync(jobId, error, cancellationToken, BuildProcessLog(job, startInfo, result));
             return;
         }
 
         logger.LogInformation(
-            "Job {JobId} completed. OutputPath={OutputPath}, OutputBytes={OutputBytes}",
+            "Job {JobId} completed. OutputPath={OutputPath}, OutputSource={OutputSource}, OutputBytes={OutputBytes}",
             jobId,
-            outputFile,
-            GetFileSize(outputFile));
+            outputFile.Path,
+            outputFile.Source,
+            outputFile.Size);
 
-        await jobs.MarkCompletedAsync(jobId, outputFile, BuildProcessLog(job, startInfo, result), cancellationToken);
+        await jobs.MarkCompletedAsync(jobId, outputFile.Path, BuildProcessLog(job, startInfo, result), cancellationToken);
     }
 
     private static async Task<ProcessResult> RunProcessAsync(ProcessStartInfo startInfo, CancellationToken cancellationToken)
     {
+        var startedAtUtc = DateTimeOffset.UtcNow;
         var stopwatch = Stopwatch.StartNew();
         using var process = TryStartProcess(startInfo, out var startError);
         if (process is null)
         {
             stopwatch.Stop();
-            return new ProcessResult(false, -1, string.Empty, string.Empty, stopwatch.Elapsed, startError);
+            return new ProcessResult(false, -1, string.Empty, string.Empty, stopwatch.Elapsed, startedAtUtc, startError);
         }
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -208,7 +250,7 @@ internal sealed class DecryptionWorker(
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
             stopwatch.Stop();
-            return new ProcessResult(true, process.ExitCode, stdout, stderr, stopwatch.Elapsed, null);
+            return new ProcessResult(true, process.ExitCode, stdout, stderr, stopwatch.Elapsed, startedAtUtc, null);
         }
         catch (OperationCanceledException)
         {
@@ -246,6 +288,220 @@ internal sealed class DecryptionWorker(
         return File.Exists(path) ? new FileInfo(path).Length : null;
     }
 
+    private static OutputCandidate? FindOutputFile(JobRecord job, string outputDirectory, DateTimeOffset processStartedAtUtc)
+    {
+        var outputCandidates = EnumerateOutputDirectoryCandidates(job.InputPath, outputDirectory).ToArray();
+        if (outputCandidates.Length > 0)
+        {
+            return outputCandidates
+                .OrderByDescending(candidate => candidate.LastWriteUtc)
+                .First();
+        }
+
+        return EnumerateInputDirectoryCandidates(job, processStartedAtUtc)
+            .Concat(EnumerateOutputParentDirectoryCandidates(job, outputDirectory, processStartedAtUtc))
+            .Concat(EnumerateInputParentDirectoryCandidates(job, processStartedAtUtc))
+            .OrderByDescending(candidate => candidate.Name.StartsWith($"{job.Id}-", StringComparison.Ordinal))
+            .ThenByDescending(candidate => candidate.LastWriteUtc)
+            .FirstOrDefault();
+    }
+
+    private static OutputCandidate? FindExistingOutputFile(JobRecord job, string outputDirectory)
+    {
+        var outputCandidates = EnumerateOutputDirectoryCandidates(job.InputPath, outputDirectory).ToArray();
+        if (outputCandidates.Length > 0)
+        {
+            return outputCandidates
+                .OrderByDescending(candidate => candidate.LastWriteUtc)
+                .First();
+        }
+
+        return EnumerateJobPrefixedInputDirectoryCandidates(job)
+            .Concat(EnumerateJobPrefixedOutputParentDirectoryCandidates(job, outputDirectory))
+            .Concat(EnumerateJobPrefixedInputParentDirectoryCandidates(job))
+            .OrderByDescending(candidate => candidate.LastWriteUtc)
+            .FirstOrDefault();
+    }
+
+    private static IEnumerable<OutputCandidate> EnumerateOutputDirectoryCandidates(string inputPath, string outputDirectory)
+    {
+        if (!Directory.Exists(outputDirectory))
+        {
+            yield break;
+        }
+
+        foreach (var path in Directory.EnumerateFiles(outputDirectory, "*", SearchOption.AllDirectories))
+        {
+            if (PathsEqual(path, inputPath))
+            {
+                continue;
+            }
+
+            yield return CreateOutputCandidate(path, "output-directory");
+        }
+    }
+
+    private static IEnumerable<OutputCandidate> EnumerateInputDirectoryCandidates(JobRecord job, DateTimeOffset processStartedAtUtc)
+    {
+        var inputDirectory = Path.GetDirectoryName(job.InputPath);
+        if (string.IsNullOrWhiteSpace(inputDirectory) || !Directory.Exists(inputDirectory))
+        {
+            yield break;
+        }
+
+        var earliestWriteUtc = processStartedAtUtc.UtcDateTime.AddSeconds(-5);
+        var recentCandidates = Directory
+            .EnumerateFiles(inputDirectory, "*", SearchOption.TopDirectoryOnly)
+            .Where(path => !PathsEqual(path, job.InputPath))
+            .Select(path => CreateOutputCandidate(path, "input-directory"))
+            .Where(candidate => candidate.LastWriteUtc >= earliestWriteUtc)
+            .ToArray();
+
+        var jobPrefixed = recentCandidates
+            .Where(candidate => candidate.Name.StartsWith($"{job.Id}-", StringComparison.Ordinal))
+            .ToArray();
+
+        foreach (var candidate in jobPrefixed.Length > 0 ? jobPrefixed : recentCandidates)
+        {
+            yield return candidate;
+        }
+    }
+
+    private static IEnumerable<OutputCandidate> EnumerateInputParentDirectoryCandidates(
+        JobRecord job,
+        DateTimeOffset processStartedAtUtc)
+    {
+        var parentDirectory = GetInputParentDirectory(job.InputPath);
+        if (string.IsNullOrWhiteSpace(parentDirectory) || !Directory.Exists(parentDirectory))
+        {
+            yield break;
+        }
+
+        var earliestWriteUtc = processStartedAtUtc.UtcDateTime.AddSeconds(-5);
+        var candidates = Directory
+            .EnumerateFiles(parentDirectory, "*", SearchOption.TopDirectoryOnly)
+            .Where(path => !PathsEqual(path, job.InputPath))
+            .Select(path => CreateOutputCandidate(path, "input-parent-directory"))
+            .Where(candidate => candidate.LastWriteUtc >= earliestWriteUtc)
+            .ToArray();
+
+        var jobPrefixed = candidates
+            .Where(candidate => candidate.Name.StartsWith($"{job.Id}-", StringComparison.Ordinal))
+            .ToArray();
+
+        foreach (var candidate in jobPrefixed.Length > 0 ? jobPrefixed : candidates)
+        {
+            yield return candidate;
+        }
+    }
+
+    private static IEnumerable<OutputCandidate> EnumerateOutputParentDirectoryCandidates(
+        JobRecord job,
+        string outputDirectory,
+        DateTimeOffset processStartedAtUtc)
+    {
+        var parentDirectory = Path.GetDirectoryName(Path.GetFullPath(outputDirectory));
+        if (string.IsNullOrWhiteSpace(parentDirectory) || !Directory.Exists(parentDirectory))
+        {
+            yield break;
+        }
+
+        var earliestWriteUtc = processStartedAtUtc.UtcDateTime.AddSeconds(-5);
+        var candidates = Directory
+            .EnumerateFiles(parentDirectory, "*", SearchOption.TopDirectoryOnly)
+            .Where(path => !PathsEqual(path, job.InputPath))
+            .Select(path => CreateOutputCandidate(path, "output-parent-directory"))
+            .Where(candidate => candidate.LastWriteUtc >= earliestWriteUtc)
+            .ToArray();
+
+        var jobPrefixed = candidates
+            .Where(candidate => candidate.Name.StartsWith($"{job.Id}-", StringComparison.Ordinal))
+            .ToArray();
+
+        foreach (var candidate in jobPrefixed.Length > 0 ? jobPrefixed : candidates)
+        {
+            yield return candidate;
+        }
+    }
+
+    private static IEnumerable<OutputCandidate> EnumerateJobPrefixedInputDirectoryCandidates(JobRecord job)
+    {
+        var inputDirectory = Path.GetDirectoryName(job.InputPath);
+        if (string.IsNullOrWhiteSpace(inputDirectory) || !Directory.Exists(inputDirectory))
+        {
+            yield break;
+        }
+
+        foreach (var path in Directory.EnumerateFiles(inputDirectory, $"{job.Id}-*", SearchOption.TopDirectoryOnly))
+        {
+            if (PathsEqual(path, job.InputPath))
+            {
+                continue;
+            }
+
+            yield return CreateOutputCandidate(path, "input-directory");
+        }
+    }
+
+    private static IEnumerable<OutputCandidate> EnumerateJobPrefixedInputParentDirectoryCandidates(JobRecord job)
+    {
+        var parentDirectory = GetInputParentDirectory(job.InputPath);
+        if (string.IsNullOrWhiteSpace(parentDirectory) || !Directory.Exists(parentDirectory))
+        {
+            yield break;
+        }
+
+        foreach (var path in Directory.EnumerateFiles(parentDirectory, $"{job.Id}-*", SearchOption.TopDirectoryOnly))
+        {
+            if (PathsEqual(path, job.InputPath))
+            {
+                continue;
+            }
+
+            yield return CreateOutputCandidate(path, "input-parent-directory");
+        }
+    }
+
+    private static IEnumerable<OutputCandidate> EnumerateJobPrefixedOutputParentDirectoryCandidates(
+        JobRecord job,
+        string outputDirectory)
+    {
+        var parentDirectory = Path.GetDirectoryName(Path.GetFullPath(outputDirectory));
+        if (string.IsNullOrWhiteSpace(parentDirectory) || !Directory.Exists(parentDirectory))
+        {
+            yield break;
+        }
+
+        foreach (var path in Directory.EnumerateFiles(parentDirectory, $"{job.Id}-*", SearchOption.TopDirectoryOnly))
+        {
+            yield return CreateOutputCandidate(path, "output-parent-directory");
+        }
+    }
+
+    private static OutputCandidate CreateOutputCandidate(string path, string source)
+    {
+        var file = new FileInfo(path);
+        return new OutputCandidate(
+            Path.GetFullPath(path),
+            Path.GetFileName(path),
+            source,
+            file.LastWriteTimeUtc,
+            file.Length);
+    }
+
+    private static bool PathsEqual(string first, string second)
+    {
+        return string.Equals(Path.GetFullPath(first), Path.GetFullPath(second), StringComparison.Ordinal);
+    }
+
+    private static string? GetInputParentDirectory(string inputPath)
+    {
+        var inputDirectory = Path.GetDirectoryName(inputPath);
+        return string.IsNullOrWhiteSpace(inputDirectory)
+            ? null
+            : Path.GetDirectoryName(inputDirectory);
+    }
+
     private static string BuildPreflightLog(JobRecord job, string executablePath, ProcessStartInfo? startInfo, string error)
     {
         var builder = new StringBuilder()
@@ -270,20 +526,27 @@ internal sealed class DecryptionWorker(
 
     private static string BuildProcessLog(JobRecord job, ProcessStartInfo startInfo, ProcessResult result)
     {
-        var outputDirectory = startInfo.ArgumentList.Count >= 3 ? startInfo.ArgumentList[2] : null;
+        var cliOutputArgument = startInfo.ArgumentList.Count >= 3 ? startInfo.ArgumentList[2] : null;
+        var outputDirectory = GetEffectiveOutputDirectory(cliOutputArgument);
+        var processInputPath = startInfo.ArgumentList.Count >= 1 ? startInfo.ArgumentList[0] : null;
         var builder = new StringBuilder()
             .AppendLine($"JobId: {job.Id}")
             .AppendLine($"OriginalFileName: {job.OriginalFileName}")
             .AppendLine($"InputPath: {job.InputPath}")
             .AppendLine($"InputExists: {File.Exists(job.InputPath)}")
             .AppendLine($"InputBytes: {GetFileSize(job.InputPath)?.ToString() ?? "n/a"}")
+            .AppendLine($"ProcessInputPath: {processInputPath ?? "n/a"}")
+            .AppendLine($"ProcessInputExists: {(!string.IsNullOrWhiteSpace(processInputPath) && File.Exists(processInputPath))}")
             .AppendLine($"Command: {FormatCommand(startInfo)}")
             .AppendLine($"WorkingDirectory: {startInfo.WorkingDirectory}")
+            .AppendLine($"CliOutputArgument: {cliOutputArgument ?? "n/a"}")
             .AppendLine($"OutputDirectory: {outputDirectory ?? "n/a"}")
             .AppendLine($"OutputDirectoryExists: {(!string.IsNullOrWhiteSpace(outputDirectory) && Directory.Exists(outputDirectory))}")
             .AppendLine($"Started: {result.Started}")
             .AppendLine($"ExitCode: {result.ExitCode}")
-            .AppendLine($"DurationMs: {Math.Round(result.Duration.TotalMilliseconds)}");
+            .AppendLine($"DurationMs: {Math.Round(result.Duration.TotalMilliseconds)}")
+            .AppendLine("OutputCandidates:")
+            .AppendLine(FormatOutputCandidates(job, outputDirectory, result.StartedAtUtc));
 
         if (!string.IsNullOrWhiteSpace(result.StartError))
         {
@@ -321,5 +584,42 @@ internal sealed class DecryptionWorker(
         string Stdout,
         string Stderr,
         TimeSpan Duration,
+        DateTimeOffset StartedAtUtc,
         string? StartError);
+
+    private static string FormatOutputCandidates(JobRecord job, string? outputDirectory, DateTimeOffset processStartedAtUtc)
+    {
+        var candidates = Enumerable.Empty<OutputCandidate>();
+        if (!string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            candidates = candidates.Concat(EnumerateOutputDirectoryCandidates(job.InputPath, outputDirectory));
+            candidates = candidates.Concat(EnumerateOutputParentDirectoryCandidates(job, outputDirectory, processStartedAtUtc));
+        }
+
+        candidates = candidates.Concat(EnumerateInputDirectoryCandidates(job, processStartedAtUtc));
+        candidates = candidates.Concat(EnumerateInputParentDirectoryCandidates(job, processStartedAtUtc));
+
+        var lines = candidates
+            .OrderBy(candidate => candidate.Source)
+            .ThenByDescending(candidate => candidate.LastWriteUtc)
+            .Take(20)
+            .Select(candidate => $"- [{candidate.Source}] {candidate.Path} ({candidate.Size} bytes, {candidate.LastWriteUtc:O})")
+            .ToArray();
+
+        return lines.Length == 0 ? "- none" : string.Join(Environment.NewLine, lines);
+    }
+
+    private static string? GetEffectiveOutputDirectory(string? cliOutputArgument)
+    {
+        return string.IsNullOrWhiteSpace(cliOutputArgument)
+            ? null
+            : Path.GetDirectoryName(Path.GetFullPath(cliOutputArgument));
+    }
+
+    private sealed record OutputCandidate(
+        string Path,
+        string Name,
+        string Source,
+        DateTime LastWriteUtc,
+        long Size);
 }
