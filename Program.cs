@@ -59,8 +59,10 @@ builder.Services.AddCors(options =>
 });
 builder.Services.AddSingleton<JobStore>();
 builder.Services.AddSingleton<JobQueue>();
+builder.Services.AddSingleton<JobDeletionService>();
 builder.Services.AddSingleton<UpdateDeploymentService>();
 builder.Services.AddHostedService<DecryptionWorker>();
+builder.Services.AddHostedService<JobCleanupWorker>();
 
 var app = builder.Build();
 
@@ -107,6 +109,37 @@ app.MapGet("/api/jobs/{id}/download", Results<PhysicalFileHttpResult, NotFound, 
         contentType: "application/octet-stream",
         fileDownloadName: Path.GetFileName(job.OutputPath));
 });
+
+app.MapDelete(
+    "/api/jobs/{id}",
+    async Task<Results<Ok<JobDeleteResult>, NotFound, Conflict<string>, BadRequest<string>>> (
+        string id,
+        JobStore jobs,
+        JobDeletionService deletion,
+        CancellationToken cancellationToken) =>
+    {
+        var job = jobs.Get(id);
+        if (job is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        if (job.Status == JobStatus.Running)
+        {
+            return TypedResults.Conflict("Running jobs cannot be deleted.");
+        }
+
+        try
+        {
+            var result = deletion.DeleteFiles(job);
+            var removed = await jobs.RemoveAsync(id, cancellationToken);
+            return removed ? TypedResults.Ok(result) : TypedResults.NotFound();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return TypedResults.BadRequest(ex.Message);
+        }
+    });
 
 app.UseTus(httpContext =>
 {

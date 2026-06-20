@@ -51,10 +51,30 @@ internal sealed class JobStore
             .ToArray();
     }
 
+    public IReadOnlyCollection<JobRecord> GetExpiredForDeletion(DateTimeOffset cutoff)
+    {
+        return _jobs.Values
+            .Where(job => job.Status is JobStatus.Completed or JobStatus.Failed)
+            .Where(job => (job.CompletedAt ?? job.UpdatedAt) <= cutoff)
+            .OrderBy(job => job.UpdatedAt)
+            .ToArray();
+    }
+
     public Task UpsertAsync(JobRecord job, CancellationToken cancellationToken)
     {
         _jobs[job.Id] = job;
         return PersistAsync(cancellationToken);
+    }
+
+    public async Task<bool> RemoveAsync(string id, CancellationToken cancellationToken)
+    {
+        if (!_jobs.TryRemove(id, out _))
+        {
+            return false;
+        }
+
+        await PersistAsync(cancellationToken);
+        return true;
     }
 
     public Task MarkQueuedAsync(string id, string log, CancellationToken cancellationToken)

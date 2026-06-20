@@ -19,6 +19,7 @@ ASP.NET Core Minimal API backend for uploading encrypted music files with tus re
 - `GET /api/jobs`: list jobs
 - `GET /api/jobs/{id}`: get one job
 - `GET /api/jobs/{id}/download`: download decrypted output
+- `DELETE /api/jobs/{id}`: delete one job, its uploaded input file, and decrypted output files
 - `GET /update`: simple browser upload page for update files
 - `POST /update`: upload update files into `UpdateRoot/{batchId}`
 - `GET /update/batches`: list uploaded update batches
@@ -139,6 +140,7 @@ sudo \
   DATA_DIR=/srv/musicdecrypto/data \
   TEMP_DIR=/srv/musicdecrypto/tmp \
   UPDATE_DIR=/srv/musicdecrypto/updates \
+  AUTO_DELETE_AFTER_DAYS=7 \
   ALLOWED_ORIGINS=https://your-frontend.example.com \
   API_KEY='replace-with-a-long-random-secret' \
   scripts/manage.sh install-service
@@ -156,6 +158,7 @@ scripts/manage.sh logs
 sudo PORT=5082 scripts/manage.sh configure
 sudo APP_DIR=/opt/musicdecrypto/backend scripts/manage.sh configure
 sudo UPDATE_DIR=/srv/musicdecrypto/updates scripts/manage.sh configure
+sudo AUTO_DELETE_AFTER_DAYS=14 scripts/manage.sh configure
 sudo ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com scripts/manage.sh configure
 sudo scripts/manage.sh reinstall-deps
 sudo scripts/manage.sh uninstall
@@ -188,4 +191,5 @@ Edit `server_name example.com;` before enabling HTTPS.
 - Files uploaded through `/update` are stored under `UpdateRoot/{batchId}`.
 - Applying a batch copies manifest-listed files into `UpdateApplyRoot`, which defaults to the app directory used by the systemd service. The `/update` apply action then runs `scripts/manage.sh publish` in the background and stops the app; with the generated systemd unit, `Restart=always` starts the newly published service.
 - Job state is stored in `StorageRoot/state/jobs.json`.
+- Completed and failed jobs are automatically deleted after `AutoDeleteAfterDays` days. The default is `7`; set `AUTO_DELETE_AFTER_DAYS=0` with `scripts/manage.sh configure` to disable automatic deletion.
 - The current worker processes jobs one at a time, which is conservative for CPU and disk usage on a small VPS.

@@ -10,5 +10,6 @@ internal sealed class AppOptions
     public string? ApiKey { get; set; }
     public bool ForceOverwrite { get; set; } = true;
     public bool ExtensiveDetection { get; set; }
+    public int AutoDeleteAfterDays { get; set; } = 7;
     public string[] AllowedOrigins { get; set; } = [];
 }
