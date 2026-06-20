@@ -121,26 +121,52 @@ app.UseTus(httpContext =>
         {
             OnFileCompleteAsync = async eventContext =>
             {
-                var file = await eventContext.GetFileAsync();
-                var metadata = await file.GetMetadataAsync(eventContext.CancellationToken);
-                var originalName = TusMetadataReader.GetString(metadata, "filename") ?? $"{file.Id}.bin";
-                var safeName = FileNameSanitizer.Sanitize(originalName);
+                var logger = eventContext.HttpContext.RequestServices
+                    .GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("MusicDecrypto.Backend.Uploads");
 
-                var jobId = Guid.NewGuid().ToString("N");
-                var inputPath = Path.Combine(paths.Uploads, $"{jobId}-{safeName}");
-                Directory.CreateDirectory(paths.Uploads);
-
-                await using (var source = await file.GetContentAsync(eventContext.CancellationToken))
-                await using (var target = File.Create(inputPath))
+                try
                 {
-                    await source.CopyToAsync(target, eventContext.CancellationToken);
-                }
+                    var file = await eventContext.GetFileAsync();
+                    var metadata = await file.GetMetadataAsync(eventContext.CancellationToken);
+                    var originalName = TusMetadataReader.GetString(metadata, "filename") ?? $"{file.Id}.bin";
+                    var safeName = FileNameSanitizer.Sanitize(originalName);
 
-                var job = JobRecord.Created(jobId, file.Id, originalName, inputPath);
-                var jobs = eventContext.HttpContext.RequestServices.GetRequiredService<JobStore>();
-                var queue = eventContext.HttpContext.RequestServices.GetRequiredService<JobQueue>();
-                await jobs.UpsertAsync(job, eventContext.CancellationToken);
-                await queue.EnqueueAsync(jobId, eventContext.CancellationToken);
+                    var jobId = Guid.NewGuid().ToString("N");
+                    var inputPath = Path.Combine(paths.Uploads, $"{jobId}-{safeName}");
+                    Directory.CreateDirectory(paths.Uploads);
+
+                    logger.LogInformation(
+                        "Tus upload completed. TusFileId={TusFileId}, OriginalFileName={OriginalFileName}, InputPath={InputPath}",
+                        file.Id,
+                        originalName,
+                        inputPath);
+
+                    await using (var source = await file.GetContentAsync(eventContext.CancellationToken))
+                    await using (var target = File.Create(inputPath))
+                    {
+                        await source.CopyToAsync(target, eventContext.CancellationToken);
+                    }
+
+                    var inputBytes = new FileInfo(inputPath).Length;
+                    var job = JobRecord.Created(jobId, file.Id, originalName, inputPath);
+                    var jobs = eventContext.HttpContext.RequestServices.GetRequiredService<JobStore>();
+                    var queue = eventContext.HttpContext.RequestServices.GetRequiredService<JobQueue>();
+                    await jobs.UpsertAsync(job, eventContext.CancellationToken);
+                    await queue.EnqueueAsync(jobId, eventContext.CancellationToken);
+
+                    logger.LogInformation(
+                        "Created decryption job from upload. JobId={JobId}, TusFileId={TusFileId}, InputPath={InputPath}, InputBytes={InputBytes}",
+                        jobId,
+                        file.Id,
+                        inputPath,
+                        inputBytes);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogError(ex, "Failed while finalizing tus upload and creating decryption job.");
+                    throw;
+                }
             }
         }
     };

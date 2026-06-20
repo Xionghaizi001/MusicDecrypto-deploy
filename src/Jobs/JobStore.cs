@@ -86,12 +86,13 @@ internal sealed class JobStore
         }, cancellationToken);
     }
 
-    public Task MarkFailedAsync(string id, string error, CancellationToken cancellationToken)
+    public Task MarkFailedAsync(string id, string error, CancellationToken cancellationToken, string? log = null)
     {
         return UpdateAsync(id, job => job with
         {
             Status = JobStatus.Failed,
             Error = error,
+            Log = log ?? job.Log,
             CompletedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         }, cancellationToken);

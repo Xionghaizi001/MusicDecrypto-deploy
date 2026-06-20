@@ -4,12 +4,17 @@ using Microsoft.Extensions.Options;
 
 namespace MusicDecrypto.Backend;
 
-internal sealed class ApiKeyMiddleware(RequestDelegate next, IOptions<AppOptions> options)
+internal sealed class ApiKeyMiddleware(
+    RequestDelegate next,
+    IOptions<AppOptions> options,
+    ILogger<ApiKeyMiddleware> logger)
 {
     public async Task InvokeAsync(HttpContext context)
     {
-        var configuredKey = options.Value.ApiKey;
-        if (string.IsNullOrWhiteSpace(configuredKey) || context.Request.Path.StartsWithSegments("/healthz"))
+        var configuredKey = options.Value.ApiKey?.Trim();
+        if (string.IsNullOrWhiteSpace(configuredKey) ||
+            HttpMethods.IsOptions(context.Request.Method) ||
+            context.Request.Path.StartsWithSegments("/healthz"))
         {
             await next(context);
             return;
@@ -30,6 +35,13 @@ internal sealed class ApiKeyMiddleware(RequestDelegate next, IOptions<AppOptions
         }
 
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        logger.LogWarning(
+            "Rejected unauthorized request. Method={Method}, Path={Path}, HasXApiKey={HasXApiKey}, HasAuthorization={HasAuthorization}, RemoteIp={RemoteIp}",
+            context.Request.Method,
+            context.Request.Path,
+            context.Request.Headers.ContainsKey("X-Api-Key"),
+            context.Request.Headers.ContainsKey("Authorization"),
+            context.Connection.RemoteIpAddress);
         await context.Response.WriteAsync("Unauthorized");
     }
 
