@@ -72,6 +72,7 @@ internal static class UpdateEndpoints
         HttpRequest request,
         IOptions<AppOptions> options,
         IWebHostEnvironment environment,
+        UpdateDeploymentService deployment,
         CancellationToken cancellationToken)
     {
         if (!UpdateAuth.IsAuthorized(request, options.Value.ApiKey))
@@ -83,7 +84,8 @@ internal static class UpdateEndpoints
         try
         {
             var result = await UpdatePackageService.ApplyAsync(paths.Updates, paths.UpdateApplyRoot, batchId, cancellationToken);
-            return TypedResults.Ok(result);
+            var deploymentResult = deployment.SchedulePublishAndRestart();
+            return TypedResults.Ok(result with { Deployment = deploymentResult });
         }
         catch (DirectoryNotFoundException)
         {

@@ -6,13 +6,17 @@ internal sealed record UpdateBatchInfo(
     bool HasManifest,
     int FileCount,
     long TotalBytes,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    UpdateManifestSource? Source);
 
 internal sealed record UpdateApplyResult(
     string BatchId,
     string ApplyRoot,
-    IReadOnlyCollection<UpdateAppliedFile> Files);
+    IReadOnlyCollection<UpdateAppliedFile> Files,
+    UpdateDeploymentResult? Deployment = null);
 
 internal sealed record UpdateAppliedFile(string Path, long Size, string Sha256);
 
 internal sealed record UpdateDeleteResult(string BatchId, bool Deleted);
+
+internal sealed record UpdateDeploymentResult(bool Scheduled, string Status, string? LogPath);

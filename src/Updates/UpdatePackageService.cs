@@ -42,7 +42,8 @@ internal static class UpdatePackageService
                     manifest is not null,
                     files.Count,
                     files.Sum(file => file.Size),
-                    new DateTimeOffset(createdAt, TimeSpan.Zero));
+                    new DateTimeOffset(createdAt, TimeSpan.Zero),
+                    manifest?.Source);
             })
             .OrderByDescending(batch => batch.CreatedAt)
             .ToArray();
@@ -238,7 +239,7 @@ internal static class UpdatePackageService
             manifestFiles.Add(new UpdateManifestFile(file.Path, source, file.Size, sha256));
         }
 
-        var manifest = new UpdateManifest(ManifestFormat, DateTimeOffset.UtcNow, manifestFiles);
+        var manifest = new UpdateManifest(ManifestFormat, DateTimeOffset.UtcNow, Source: null, manifestFiles);
         var manifestPath = Path.Combine(batchDirectory, ManifestFileName);
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
     }

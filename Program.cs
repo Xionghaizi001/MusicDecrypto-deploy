@@ -59,6 +59,7 @@ builder.Services.AddCors(options =>
 });
 builder.Services.AddSingleton<JobStore>();
 builder.Services.AddSingleton<JobQueue>();
+builder.Services.AddSingleton<UpdateDeploymentService>();
 builder.Services.AddHostedService<DecryptionWorker>();
 
 var app = builder.Build();

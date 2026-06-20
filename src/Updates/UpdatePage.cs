@@ -112,11 +112,16 @@ internal static class UpdatePage
       word-break: break-word;
     }
 
+    .commits {
+      margin: 0;
+      padding-left: 20px;
+      color: #202124;
+      font-size: 13px;
+    }
+
     output {
       display: block;
       margin-top: 18px;
-      white-space: pre-wrap;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 13px;
       background: #1f2328;
       color: #f4f4f4;
@@ -125,12 +130,29 @@ internal static class UpdatePage
       min-height: 44px;
     }
 
+    output strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+
+    output ul {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+
+    output code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      word-break: break-word;
+    }
+
     @media (prefers-color-scheme: dark) {
       body { background: #111312; color: #eeeeea; }
       form, section { background: #191c1b; border-color: #333835; }
       input { background: #111312; border-color: #444a47; }
       .batch { border-color: #333835; }
       .meta { color: #a5aaa4; }
+      .commits { color: #eeeeea; }
     }
   </style>
 </head>
@@ -143,8 +165,8 @@ internal static class UpdatePage
         <input id="api-key" type="password" autocomplete="current-password" required>
       </label>
       <label>
-        Files
-        <input id="files" type="file" multiple>
+        ZIP Package
+        <input id="files" type="file" accept=".zip,application/zip,application/x-zip-compressed">
       </label>
       <div class="row">
         <button id="submit" type="submit">Upload</button>
@@ -189,6 +211,75 @@ internal static class UpdatePage
       return `${(value / 1024 / 1024).toFixed(1)} MB`;
     }
 
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function formatSource(source) {
+      if (!source || source.type !== 'git') return '';
+      const commits = source.commits || [];
+      const commitItems = commits.map(commit => {
+        const title = `${commit.shortHash || ''} ${commit.subject || ''}`.trim();
+        const body = commit.body ? `<div class="meta">${escapeHtml(commit.body)}</div>` : '';
+        return `<li><strong>${escapeHtml(title)}</strong>${body}</li>`;
+      }).join('');
+      return `
+        <div class="meta">git: ${escapeHtml(source.range || '')}</div>
+        ${commitItems ? `<ul class="commits">${commitItems}</ul>` : ''}
+      `;
+    }
+
+    function setStatus(html) {
+      status.innerHTML = html;
+    }
+
+    function setStatusText(text) {
+      status.textContent = text;
+    }
+
+    function renderFileList(files) {
+      if (!files?.length) return '';
+      return `<ul>${files.map(file => `
+        <li><code>${escapeHtml(file.path || '')}</code> · ${formatBytes(file.size || 0)}</li>
+      `).join('')}</ul>`;
+    }
+
+    function renderUploadResult(result) {
+      return `
+        <strong>Upload complete</strong>
+        <div>Batch: <code>${escapeHtml(result.batchId || '')}</code></div>
+        <div>Directory: <code>${escapeHtml(result.directory || '')}</code></div>
+        ${renderFileList(result.files || [])}
+      `;
+    }
+
+    function renderApplyResult(result) {
+      const deployment = result.deployment;
+      const deploymentText = deployment
+        ? `<div>Deployment: ${escapeHtml(deployment.status)}${deployment.logPath ? ` · log: <code>${escapeHtml(deployment.logPath)}</code>` : ''}</div>`
+        : '';
+      return `
+        <strong>Update applied</strong>
+        <div>Batch: <code>${escapeHtml(result.batchId || '')}</code></div>
+        <div>Apply root: <code>${escapeHtml(result.applyRoot || '')}</code></div>
+        <div>${(result.files || []).length} files replaced.</div>
+        ${deploymentText}
+        ${renderFileList(result.files || [])}
+      `;
+    }
+
+    function renderDeleteResult(result) {
+      return `
+        <strong>${result.deleted ? 'Batch deleted' : 'Batch was not found'}</strong>
+        <div>Batch: <code>${escapeHtml(result.batchId || '')}</code></div>
+      `;
+    }
+
     async function loadBatches() {
       batches.textContent = 'Loading...';
       try {
@@ -206,8 +297,9 @@ internal static class UpdatePage
             <strong>${item.batchId}</strong>
             <div class="meta">${item.fileCount} files · ${formatBytes(item.totalBytes)} · manifest: ${item.hasManifest ? 'yes' : 'no'}</div>
             <div class="meta">${item.directory}</div>
+            ${formatSource(item.source)}
             <div class="row">
-              <button type="button" data-action="apply" data-id="${item.batchId}">Apply</button>
+              <button type="button" data-action="apply" data-id="${item.batchId}">Apply + Publish + Restart</button>
               <button type="button" class="danger" data-action="delete" data-id="${item.batchId}">Delete</button>
             </div>
           `;
@@ -222,12 +314,12 @@ internal static class UpdatePage
       event.preventDefault();
 
       if (!fileInput.files.length) {
-        status.textContent = 'Choose at least one file.';
+        setStatusText('Choose a zip package.');
         return;
       }
 
       submit.disabled = true;
-      status.textContent = 'Uploading...';
+      setStatusText('Uploading...');
 
       const body = new FormData();
       for (const file of fileInput.files) {
@@ -243,15 +335,15 @@ internal static class UpdatePage
 
         const text = await response.text();
         if (!response.ok) {
-          status.textContent = `${response.status} ${response.statusText}\n${text}`;
+          setStatusText(`${response.status} ${response.statusText}\n${text}`);
           return;
         }
 
         const result = JSON.parse(text);
-        status.textContent = JSON.stringify(result, null, 2);
+        setStatus(renderUploadResult(result));
         await loadBatches();
       } catch (error) {
-        status.textContent = error instanceof Error ? error.message : String(error);
+        setStatusText(error instanceof Error ? error.message : String(error));
       } finally {
         submit.disabled = false;
       }
@@ -271,14 +363,17 @@ internal static class UpdatePage
       try {
         if (action === 'apply') {
           const result = await request(`/update/${encodeURIComponent(id)}/apply`, { method: 'POST' });
-          status.textContent = JSON.stringify(result, null, 2);
+          setStatus(renderApplyResult(result));
+          if (result.deployment?.scheduled) {
+            return;
+          }
         } else if (action === 'delete') {
           const result = await request(`/update/${encodeURIComponent(id)}`, { method: 'DELETE' });
-          status.textContent = JSON.stringify(result, null, 2);
+          setStatus(renderDeleteResult(result));
         }
         await loadBatches();
       } catch (error) {
-        status.textContent = error instanceof Error ? error.message : String(error);
+        setStatusText(error instanceof Error ? error.message : String(error));
       } finally {
         button.disabled = false;
       }

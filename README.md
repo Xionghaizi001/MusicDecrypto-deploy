@@ -186,6 +186,6 @@ Edit `server_name example.com;` before enabling HTTPS.
 - Uploaded files are copied into `StorageRoot/uploads`.
 - Decrypted files are written under `StorageRoot/outputs/{jobId}`.
 - Files uploaded through `/update` are stored under `UpdateRoot/{batchId}`.
-- Applying a batch copies manifest-listed files into `UpdateApplyRoot`, which defaults to the app directory used by the systemd service. It does not automatically restart the service.
+- Applying a batch copies manifest-listed files into `UpdateApplyRoot`, which defaults to the app directory used by the systemd service. The `/update` apply action then runs `scripts/manage.sh publish` in the background and stops the app; with the generated systemd unit, `Restart=always` starts the newly published service.
 - Job state is stored in `StorageRoot/state/jobs.json`.
 - The current worker processes jobs one at a time, which is conservative for CPU and disk usage on a small VPS.

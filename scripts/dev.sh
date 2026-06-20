@@ -109,6 +109,7 @@ normalize_files() {
 
 write_manifest() {
   local staging_dir="$1"
+  local git_range="${2:-}"
   local manifest_path="$staging_dir/musicdecrypto-update.json"
   local first=1
   local path
@@ -117,6 +118,10 @@ write_manifest() {
     printf '{\n'
     printf '  "format": "musicdecrypto.update.v1",\n'
     printf '  "createdAt": "%s",\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    if [ -n "$git_range" ]; then
+      write_git_source_json "$git_range"
+      printf ',\n'
+    fi
     printf '  "files": [\n'
     while IFS= read -r path; do
       local source_path="$PROJECT_DIR/$path"
@@ -142,10 +147,50 @@ write_manifest() {
   } >"$manifest_path"
 }
 
+write_git_source_json() {
+  local git_range="$1"
+  local commit_format='%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1e'
+  local commits
+  commits="$(git -C "$PROJECT_DIR" log --reverse --format="$commit_format" "$git_range")"
+
+  printf '  "source": {\n'
+  printf '    "type": "git",\n'
+  printf '    "range": "%s",\n' "$(json_escape "$git_range")"
+  printf '    "commits": [\n'
+
+  local first=1
+  local record
+  while IFS= read -r -d $'\x1e' record; do
+    [ -n "$record" ] || continue
+    IFS=$'\x1f' read -r hash short_hash author authored_at subject body <<<"$record"
+
+    if [ "$first" -eq 0 ]; then
+      printf ',\n'
+    fi
+    first=0
+
+    printf '      {\n'
+    printf '        "hash": "%s",\n' "$(json_escape "$hash")"
+    printf '        "shortHash": "%s",\n' "$(json_escape "$short_hash")"
+    printf '        "author": "%s",\n' "$(json_escape "$author")"
+    printf '        "authoredAt": "%s",\n' "$(json_escape "$authored_at")"
+    printf '        "subject": "%s",\n' "$(json_escape "$subject")"
+    printf '        "body": "%s"\n' "$(json_escape "$body")"
+    printf '      }'
+  done <<<"$commits"
+
+  printf '\n'
+  printf '    ]\n'
+  printf '  }'
+}
+
 json_escape() {
   local value="$1"
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
   printf '%s' "$value"
 }
 
@@ -206,7 +251,11 @@ cmd_pack() {
     cp "$PROJECT_DIR/$path" "$staging_dir/files/$path"
   done <<<"$file_list"
 
-  write_manifest "$staging_dir" <<<"$file_list"
+  if [ "$mode" = "git" ]; then
+    write_manifest "$staging_dir" "$git_range" <<<"$file_list"
+  else
+    write_manifest "$staging_dir" <<<"$file_list"
+  fi
 
   mkdir -p "$(dirname "$output")"
   if command -v zip >/dev/null 2>&1; then
