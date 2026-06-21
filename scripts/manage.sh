@@ -49,6 +49,7 @@ PROVIDED_SERVER_NAME="${SERVER_NAME+x}"
 PROVIDED_SSL_CERTIFICATE="${SSL_CERTIFICATE+x}"
 PROVIDED_SSL_CERTIFICATE_KEY="${SSL_CERTIFICATE_KEY+x}"
 PROVIDED_NGINX_SITE_FILE="${NGINX_SITE_FILE+x}"
+PROVIDED_NGINX_USER="${NGINX_USER+x}"
 PROVIDED_FRONTEND_BUILD="${FRONTEND_BUILD+x}"
 PROVIDED_PNPM_BIN="${PNPM_BIN+x}"
 PROVIDED_FORCE_OVERWRITE="${FORCE_OVERWRITE+x}"
@@ -75,6 +76,7 @@ SERVER_NAME="${SERVER_NAME:-}"
 SSL_CERTIFICATE="${SSL_CERTIFICATE:-}"
 SSL_CERTIFICATE_KEY="${SSL_CERTIFICATE_KEY:-}"
 NGINX_SITE_FILE="${NGINX_SITE_FILE:-/etc/nginx/sites-available/musicdecrypto.conf}"
+NGINX_USER="${NGINX_USER:-}"
 FRONTEND_BUILD="${FRONTEND_BUILD:-1}"
 PNPM_BIN="${PNPM_BIN:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-true}"
@@ -99,6 +101,7 @@ Setup commands:
   extract-package  Extract deploy/package archive to PACKAGE_DIR
   install-service  Create user, directories, env file, systemd service, and start it
   publish-frontend Build and copy the frontend into FRONTEND_DIR
+  write-web-config Generate the Nginx site file without reloading Nginx
   install-web      Publish frontend, write Nginx config, and reload Nginx
   install-all      Install backend service and web frontend
 
@@ -131,6 +134,7 @@ Common settings:
   SSL_CERTIFICATE=/path/to/fullchain.pem optional
   SSL_CERTIFICATE_KEY=/path/to/privkey.pem optional
   NGINX_SITE_FILE=$NGINX_SITE_FILE
+  NGINX_USER=$NGINX_USER
   FRONTEND_BUILD=$FRONTEND_BUILD
   PNPM_BIN=/path/to/pnpm optional
   AUTO_DELETE_AFTER_DAYS=$AUTO_DELETE_AFTER_DAYS
@@ -168,6 +172,26 @@ require_root() {
 
 have() {
   command -v "$1" >/dev/null 2>&1
+}
+
+default_nginx_user() {
+  if [ -f /etc/nginx/nginx.conf ]; then
+    local configured_user
+    configured_user="$(awk '$1 == "user" {gsub(";", "", $2); print $2; exit}' /etc/nginx/nginx.conf)"
+    if [ -n "$configured_user" ] && id "$configured_user" >/dev/null 2>&1; then
+      printf '%s\n' "$configured_user"
+      return
+    fi
+  fi
+
+  for candidate in www-data nginx http; do
+    if id "$candidate" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  true
 }
 
 dotnet_cmd() {
@@ -460,6 +484,11 @@ resolve_runtime_config() {
     NGINX_SITE_FILE="${NGINX_SITE_FILE:-/etc/nginx/sites-available/musicdecrypto.conf}"
   fi
 
+  if ! was_provided NGINX_USER; then
+    NGINX_USER="$(env_value MUSICDECRYPTO_MANAGE_NGINX_USER || true)"
+    NGINX_USER="${NGINX_USER:-$(default_nginx_user || true)}"
+  fi
+
   if ! was_provided FRONTEND_BUILD; then
     FRONTEND_BUILD="$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_BUILD || true)"
     FRONTEND_BUILD="${FRONTEND_BUILD:-1}"
@@ -494,6 +523,7 @@ SERVER_NAME=$SERVER_NAME
 SSL_CERTIFICATE=$SSL_CERTIFICATE
 SSL_CERTIFICATE_KEY=$SSL_CERTIFICATE_KEY
 NGINX_SITE_FILE=$NGINX_SITE_FILE
+NGINX_USER=$NGINX_USER
 FRONTEND_BUILD=$FRONTEND_BUILD
 PNPM_BIN=$PNPM_BIN
 FORCE_OVERWRITE=$FORCE_OVERWRITE
@@ -608,6 +638,29 @@ cmd_extract_package() {
   chmod +x "$PACKAGE_DIR/musicdecrypto"
 }
 
+ensure_nginx_can_read_frontend() {
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    return
+  fi
+
+  if [ -z "$NGINX_USER" ]; then
+    log "Nginx user was not detected. If Nginx returns permission denied, set NGINX_USER=www-data or your Nginx worker user."
+    chmod -R a+rX "$FRONTEND_DIR"
+    return
+  fi
+
+  log "Granting Nginx user '$NGINX_USER' access to frontend files"
+  chown -R "$NGINX_USER:$NGINX_USER" "$FRONTEND_DIR"
+  find "$FRONTEND_DIR" -type d -exec chmod 755 {} +
+  find "$FRONTEND_DIR" -type f -exec chmod 644 {} +
+
+  local path="$FRONTEND_DIR"
+  while [ "$path" != "/" ]; do
+    chmod a+x "$path" 2>/dev/null || true
+    path="$(dirname "$path")"
+  done
+}
+
 cmd_publish_frontend() {
   resolve_runtime_config
 
@@ -635,9 +688,7 @@ cmd_publish_frontend() {
   mkdir -p "$FRONTEND_DIR"
   cp -a "$source_dist/." "$FRONTEND_DIR/"
 
-  if [ "${EUID:-$(id -u)}" -eq 0 ] && id "$SERVICE_USER" >/dev/null 2>&1; then
-    chown -R "$SERVICE_USER:$SERVICE_GROUP" "$FRONTEND_DIR"
-  fi
+  ensure_nginx_can_read_frontend
 }
 
 write_nginx_file() {
@@ -653,6 +704,7 @@ write_nginx_file() {
   mkdir -p "$(dirname "$NGINX_SITE_FILE")"
 
   if [ -n "$SSL_CERTIFICATE" ]; then
+    log "Generating HTTPS Nginx site. Certificate=$SSL_CERTIFICATE Key=$SSL_CERTIFICATE_KEY"
     cat >"$NGINX_SITE_FILE" <<NGINX
 server {
     listen 80;
@@ -727,6 +779,7 @@ server {
 }
 NGINX
   else
+    log "Generating HTTP Nginx site. No SSL_CERTIFICATE/SSL_CERTIFICATE_KEY were provided."
     cat >"$NGINX_SITE_FILE" <<NGINX
 server {
     listen 80;
@@ -797,6 +850,10 @@ NGINX
   fi
 }
 
+cmd_write_web_config() {
+  write_nginx_file
+}
+
 cmd_install_web() {
   require_root
 
@@ -861,6 +918,7 @@ MUSICDECRYPTO_MANAGE_SERVER_NAME=$SERVER_NAME
 MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE=$SSL_CERTIFICATE
 MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE_KEY=$SSL_CERTIFICATE_KEY
 MUSICDECRYPTO_MANAGE_NGINX_SITE_FILE=$NGINX_SITE_FILE
+MUSICDECRYPTO_MANAGE_NGINX_USER=$NGINX_USER
 MUSICDECRYPTO_MANAGE_FRONTEND_BUILD=$FRONTEND_BUILD
 MUSICDECRYPTO_MANAGE_PNPM_BIN=$PNPM_BIN
 Kestrel__Endpoints__Http__Url=http://$BIND_HOST:$PORT
@@ -1018,6 +1076,7 @@ case "$command" in
   extract-package) cmd_extract_package ;;
   install-service) cmd_install_service ;;
   publish-frontend) cmd_publish_frontend ;;
+  write-web-config) cmd_write_web_config ;;
   install-web) cmd_install_web ;;
   install-all) cmd_install_all ;;
   configure) cmd_configure ;;
