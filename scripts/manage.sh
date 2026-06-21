@@ -50,6 +50,7 @@ PROVIDED_SSL_CERTIFICATE="${SSL_CERTIFICATE+x}"
 PROVIDED_SSL_CERTIFICATE_KEY="${SSL_CERTIFICATE_KEY+x}"
 PROVIDED_NGINX_SITE_FILE="${NGINX_SITE_FILE+x}"
 PROVIDED_FRONTEND_BUILD="${FRONTEND_BUILD+x}"
+PROVIDED_PNPM_BIN="${PNPM_BIN+x}"
 PROVIDED_FORCE_OVERWRITE="${FORCE_OVERWRITE+x}"
 PROVIDED_EXTENSIVE_DETECTION="${EXTENSIVE_DETECTION+x}"
 PROVIDED_AUTO_DELETE_AFTER_DAYS="${AUTO_DELETE_AFTER_DAYS+x}"
@@ -75,6 +76,7 @@ SSL_CERTIFICATE="${SSL_CERTIFICATE:-}"
 SSL_CERTIFICATE_KEY="${SSL_CERTIFICATE_KEY:-}"
 NGINX_SITE_FILE="${NGINX_SITE_FILE:-/etc/nginx/sites-available/musicdecrypto.conf}"
 FRONTEND_BUILD="${FRONTEND_BUILD:-1}"
+PNPM_BIN="${PNPM_BIN:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-true}"
 EXTENSIVE_DETECTION="${EXTENSIVE_DETECTION:-false}"
 AUTO_DELETE_AFTER_DAYS="${AUTO_DELETE_AFTER_DAYS:-7}"
@@ -130,6 +132,7 @@ Common settings:
   SSL_CERTIFICATE_KEY=/path/to/privkey.pem optional
   NGINX_SITE_FILE=$NGINX_SITE_FILE
   FRONTEND_BUILD=$FRONTEND_BUILD
+  PNPM_BIN=/path/to/pnpm optional
   AUTO_DELETE_AFTER_DAYS=$AUTO_DELETE_AFTER_DAYS
   ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
   PACKAGE_ARCHIVE=$PACKAGE_ARCHIVE
@@ -180,6 +183,46 @@ dotnet_cmd() {
 
   if [ -x "$DOTNET_INSTALL_DIR/dotnet" ]; then
     printf '%s\n' "$DOTNET_INSTALL_DIR/dotnet"
+    return
+  fi
+
+  true
+}
+
+pnpm_cmd() {
+  if [ -n "$PNPM_BIN" ]; then
+    printf '%s\n' "$PNPM_BIN"
+    return
+  fi
+
+  if command -v pnpm >/dev/null 2>&1; then
+    command -v pnpm
+    return
+  fi
+
+  if command -v npm >/dev/null 2>&1; then
+    local npm_prefix
+    npm_prefix="$(npm config get prefix 2>/dev/null || true)"
+    if [ -x "$npm_prefix/bin/pnpm" ]; then
+      printf '%s\n' "$npm_prefix/bin/pnpm"
+      return
+    fi
+  fi
+
+  for candidate in \
+    /usr/local/bin/pnpm \
+    /usr/bin/pnpm \
+    /root/.local/share/pnpm/pnpm \
+    "$HOME/.local/share/pnpm/pnpm"
+  do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  if command -v corepack >/dev/null 2>&1; then
+    printf 'corepack pnpm\n'
     return
   fi
 
@@ -421,6 +464,10 @@ resolve_runtime_config() {
     FRONTEND_BUILD="$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_BUILD || true)"
     FRONTEND_BUILD="${FRONTEND_BUILD:-1}"
   fi
+
+  if ! was_provided PNPM_BIN; then
+    PNPM_BIN="$(env_value MUSICDECRYPTO_MANAGE_PNPM_BIN || true)"
+  fi
 }
 
 cmd_show_config() {
@@ -448,6 +495,7 @@ SSL_CERTIFICATE=$SSL_CERTIFICATE
 SSL_CERTIFICATE_KEY=$SSL_CERTIFICATE_KEY
 NGINX_SITE_FILE=$NGINX_SITE_FILE
 FRONTEND_BUILD=$FRONTEND_BUILD
+PNPM_BIN=$PNPM_BIN
 FORCE_OVERWRITE=$FORCE_OVERWRITE
 EXTENSIVE_DETECTION=$EXTENSIVE_DETECTION
 AUTO_DELETE_AFTER_DAYS=$AUTO_DELETE_AFTER_DAYS
@@ -569,13 +617,15 @@ cmd_publish_frontend() {
   [ -f "$FRONTEND_SOURCE_DIR/package.json" ] || fail "frontend package.json not found: $FRONTEND_SOURCE_DIR/package.json"
 
   if [ "$FRONTEND_BUILD" != "0" ]; then
-    have pnpm || fail "pnpm is required to build the frontend. Install pnpm or run with FRONTEND_BUILD=0 after preparing $source_dist."
+    local pnpm_path
+    pnpm_path="$(pnpm_cmd)"
+    [ -n "$pnpm_path" ] || fail "pnpm is required to build the frontend. If pnpm is installed for another user, pass PNPM_BIN=/path/to/pnpm, run with sudo -E, or run with FRONTEND_BUILD=0 after preparing $source_dist."
 
     log "Installing frontend dependencies"
-    pnpm -C "$FRONTEND_SOURCE_DIR" install --frozen-lockfile
+    $pnpm_path -C "$FRONTEND_SOURCE_DIR" install --frozen-lockfile
 
     log "Building frontend"
-    pnpm -C "$FRONTEND_SOURCE_DIR" build
+    $pnpm_path -C "$FRONTEND_SOURCE_DIR" build
   fi
 
   [ -f "$source_dist/index.html" ] || fail "frontend build output not found: $source_dist/index.html"
@@ -812,6 +862,7 @@ MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE=$SSL_CERTIFICATE
 MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE_KEY=$SSL_CERTIFICATE_KEY
 MUSICDECRYPTO_MANAGE_NGINX_SITE_FILE=$NGINX_SITE_FILE
 MUSICDECRYPTO_MANAGE_FRONTEND_BUILD=$FRONTEND_BUILD
+MUSICDECRYPTO_MANAGE_PNPM_BIN=$PNPM_BIN
 Kestrel__Endpoints__Http__Url=http://$BIND_HOST:$PORT
 MusicDecrypto__StorageRoot=$DATA_DIR
 MusicDecrypto__TempRoot=$TEMP_DIR
