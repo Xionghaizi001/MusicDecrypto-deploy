@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Net.Http.Headers;
 using Microsoft.Extensions.Options;
 using MusicDecrypto.Backend;
 using tusdotnet;
@@ -50,6 +51,7 @@ builder.Services.AddCors(options =>
                 "Upload-Defer-Length")
             .WithExposedHeaders(
                 "Location",
+                "Content-Disposition",
                 "Tus-Resumable",
                 "Upload-Offset",
                 "Upload-Length",
@@ -86,7 +88,10 @@ app.MapGet("/api/jobs/{id}", Results<Ok<JobRecord>, NotFound> (string id, JobSto
     return job is null ? TypedResults.NotFound() : TypedResults.Ok(job);
 });
 
-app.MapGet("/api/jobs/{id}/download", Results<PhysicalFileHttpResult, NotFound, BadRequest<string>> (string id, JobStore jobs) =>
+app.MapGet("/api/jobs/{id}/download", Results<PhysicalFileHttpResult, NotFound, BadRequest<string>> (
+    string id,
+    JobStore jobs,
+    HttpContext httpContext) =>
 {
     var job = jobs.Get(id);
     if (job is null)
@@ -104,42 +109,21 @@ app.MapGet("/api/jobs/{id}/download", Results<PhysicalFileHttpResult, NotFound, 
         return TypedResults.NotFound();
     }
 
+    httpContext.Response.Headers[HeaderNames.ContentDisposition] =
+        BuildContentDisposition(Path.GetFileName(job.OutputPath));
+
     return TypedResults.PhysicalFile(
         job.OutputPath,
-        contentType: "application/octet-stream",
-        fileDownloadName: Path.GetFileName(job.OutputPath));
+        contentType: "application/octet-stream");
 });
 
 app.MapDelete(
     "/api/jobs/{id}",
-    async Task<Results<Ok<JobDeleteResult>, NotFound, Conflict<string>, BadRequest<string>>> (
-        string id,
-        JobStore jobs,
-        JobDeletionService deletion,
-        CancellationToken cancellationToken) =>
-    {
-        var job = jobs.Get(id);
-        if (job is null)
-        {
-            return TypedResults.NotFound();
-        }
+    DeleteJobAsync);
 
-        if (job.Status == JobStatus.Running)
-        {
-            return TypedResults.Conflict("Running jobs cannot be deleted.");
-        }
-
-        try
-        {
-            var result = deletion.DeleteFiles(job);
-            var removed = await jobs.RemoveAsync(id, cancellationToken);
-            return removed ? TypedResults.Ok(result) : TypedResults.NotFound();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return TypedResults.BadRequest(ex.Message);
-        }
-    });
+app.MapPost(
+    "/api/jobs/{id}/delete",
+    DeleteJobAsync);
 
 app.UseTus(httpContext =>
 {
@@ -207,3 +191,50 @@ app.UseTus(httpContext =>
 });
 
 app.Run();
+
+static async Task<Results<Ok<JobDeleteResult>, NotFound, Conflict<string>, BadRequest<string>>> DeleteJobAsync(
+    string id,
+    JobStore jobs,
+    JobDeletionService deletion,
+    CancellationToken cancellationToken)
+{
+    var job = jobs.Get(id);
+    if (job is null)
+    {
+        return TypedResults.NotFound();
+    }
+
+    if (job.Status == JobStatus.Running)
+    {
+        return TypedResults.Conflict("Running jobs cannot be deleted.");
+    }
+
+    try
+    {
+        var result = deletion.DeleteFiles(job);
+        var removed = await jobs.RemoveAsync(id, cancellationToken);
+        return removed ? TypedResults.Ok(result) : TypedResults.NotFound();
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        return TypedResults.BadRequest(ex.Message);
+    }
+}
+
+static string BuildContentDisposition(string fileName)
+{
+    var fallback = BuildAsciiFileNameFallback(fileName);
+    var encoded = Uri.EscapeDataString(fileName);
+
+    return $"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}";
+}
+
+static string BuildAsciiFileNameFallback(string fileName)
+{
+    var fallback = new string(fileName
+        .Select(ch => ch is >= ' ' and <= '~' && ch is not '"' and not '\\' ? ch : '_')
+        .ToArray())
+        .Trim();
+
+    return string.IsNullOrWhiteSpace(fallback) ? "download.bin" : fallback;
+}

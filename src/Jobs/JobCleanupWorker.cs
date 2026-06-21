@@ -10,12 +10,19 @@ internal sealed class JobCleanupWorker(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await CleanupOnceAsync(stoppingToken);
-
-        using var timer = new PeriodicTimer(TimeSpan.FromHours(1));
-        while (await timer.WaitForNextTickAsync(stoppingToken))
+        try
         {
             await CleanupOnceAsync(stoppingToken);
+
+            using var timer = new PeriodicTimer(TimeSpan.FromHours(1));
+            while (await timer.WaitForNextTickAsync(stoppingToken))
+            {
+                await CleanupOnceAsync(stoppingToken);
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Normal shutdown.
         }
     }
 
