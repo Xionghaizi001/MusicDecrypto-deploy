@@ -39,10 +39,17 @@ PROVIDED_DATA_DIR="${DATA_DIR+x}"
 PROVIDED_TEMP_DIR="${TEMP_DIR+x}"
 PROVIDED_UPDATE_DIR="${UPDATE_DIR+x}"
 PROVIDED_APPLY_DIR="${APPLY_DIR+x}"
+PROVIDED_FRONTEND_SOURCE_DIR="${FRONTEND_SOURCE_DIR+x}"
+PROVIDED_FRONTEND_DIR="${FRONTEND_DIR+x}"
 PROVIDED_BIND_HOST="${BIND_HOST+x}"
 PROVIDED_PORT="${PORT+x}"
 PROVIDED_API_KEY="${API_KEY+x}"
 PROVIDED_ALLOWED_ORIGINS="${ALLOWED_ORIGINS+x}"
+PROVIDED_SERVER_NAME="${SERVER_NAME+x}"
+PROVIDED_SSL_CERTIFICATE="${SSL_CERTIFICATE+x}"
+PROVIDED_SSL_CERTIFICATE_KEY="${SSL_CERTIFICATE_KEY+x}"
+PROVIDED_NGINX_SITE_FILE="${NGINX_SITE_FILE+x}"
+PROVIDED_FRONTEND_BUILD="${FRONTEND_BUILD+x}"
 PROVIDED_FORCE_OVERWRITE="${FORCE_OVERWRITE+x}"
 PROVIDED_EXTENSIVE_DETECTION="${EXTENSIVE_DETECTION+x}"
 PROVIDED_AUTO_DELETE_AFTER_DAYS="${AUTO_DELETE_AFTER_DAYS+x}"
@@ -57,10 +64,17 @@ DATA_DIR="${DATA_DIR:-/var/lib/musicdecrypto}"
 TEMP_DIR="${TEMP_DIR:-/var/tmp/musicdecrypto}"
 UPDATE_DIR="${UPDATE_DIR:-$DATA_DIR/updates}"
 APPLY_DIR="${APPLY_DIR:-$APP_DIR}"
+FRONTEND_SOURCE_DIR="${FRONTEND_SOURCE_DIR:-$(cd "$PROJECT_DIR/../frontend" && pwd)}"
+FRONTEND_DIR="${FRONTEND_DIR:-$APP_DIR/frontend-dist}"
 BIND_HOST="${BIND_HOST:-127.0.0.1}"
 PORT="${PORT:-5080}"
 API_KEY="${API_KEY:-}"
 ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-}"
+SERVER_NAME="${SERVER_NAME:-}"
+SSL_CERTIFICATE="${SSL_CERTIFICATE:-}"
+SSL_CERTIFICATE_KEY="${SSL_CERTIFICATE_KEY:-}"
+NGINX_SITE_FILE="${NGINX_SITE_FILE:-/etc/nginx/sites-available/musicdecrypto.conf}"
+FRONTEND_BUILD="${FRONTEND_BUILD:-1}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-true}"
 EXTENSIVE_DETECTION="${EXTENSIVE_DETECTION:-false}"
 AUTO_DELETE_AFTER_DAYS="${AUTO_DELETE_AFTER_DAYS:-7}"
@@ -82,6 +96,9 @@ Setup commands:
   publish          Restore and publish the ASP.NET backend
   extract-package  Extract deploy/package archive to PACKAGE_DIR
   install-service  Create user, directories, env file, systemd service, and start it
+  publish-frontend Build and copy the frontend into FRONTEND_DIR
+  install-web      Publish frontend, write Nginx config, and reload Nginx
+  install-all      Install backend service and web frontend
 
 Runtime commands:
   start            Start the systemd service
@@ -103,9 +120,16 @@ Common settings:
   TEMP_DIR=$TEMP_DIR
   UPDATE_DIR=$UPDATE_DIR
   APPLY_DIR=$APPLY_DIR
+  FRONTEND_SOURCE_DIR=$FRONTEND_SOURCE_DIR
+  FRONTEND_DIR=$FRONTEND_DIR
   BIND_HOST=$BIND_HOST
   PORT=$PORT
   API_KEY=<secret>
+  SERVER_NAME=<required-for-install-web>
+  SSL_CERTIFICATE=/path/to/fullchain.pem optional
+  SSL_CERTIFICATE_KEY=/path/to/privkey.pem optional
+  NGINX_SITE_FILE=$NGINX_SITE_FILE
+  FRONTEND_BUILD=$FRONTEND_BUILD
   AUTO_DELETE_AFTER_DAYS=$AUTO_DELETE_AFTER_DAYS
   ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
   PACKAGE_ARCHIVE=$PACKAGE_ARCHIVE
@@ -117,6 +141,8 @@ Examples:
   sudo API_KEY='replace-with-secret' PORT=5080 $0 install-service
   sudo PORT=5080 $0 install-service
   sudo PORT=5081 ALLOWED_ORIGINS=https://app.example.com $0 configure
+  sudo PORT=5081 SERVER_NAME=your-domain.example $0 install-web
+  sudo API_KEY='replace-with-secret' PORT=5081 SERVER_NAME=your-domain.example $0 install-all
   $0 api-check
   sudo REMOVE_DATA=1 $0 uninstall
 USAGE
@@ -200,7 +226,7 @@ env_value() {
   local key="$1"
   local file="${2:-$ENV_FILE}"
 
-  if [ ! -f "$file" ]; then
+  if [ ! -r "$file" ]; then
     return
   fi
 
@@ -244,7 +270,7 @@ configured_service_value() {
 configured_allowed_origins() {
   local file="${1:-$ENV_FILE}"
 
-  if [ ! -f "$file" ]; then
+  if [ ! -r "$file" ]; then
     return
   fi
 
@@ -331,6 +357,16 @@ resolve_runtime_config() {
     APPLY_DIR="${APPLY_DIR:-$APP_DIR}"
   fi
 
+  if ! was_provided FRONTEND_SOURCE_DIR; then
+    FRONTEND_SOURCE_DIR="$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR || true)"
+    FRONTEND_SOURCE_DIR="${FRONTEND_SOURCE_DIR:-$(cd "$PROJECT_DIR/../frontend" && pwd)}"
+  fi
+
+  if ! was_provided FRONTEND_DIR; then
+    FRONTEND_DIR="$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_DIR || true)"
+    FRONTEND_DIR="${FRONTEND_DIR:-$APP_DIR/frontend-dist}"
+  fi
+
   if ! was_provided PACKAGE_DIR; then
     PACKAGE_DIR="$(env_value MUSICDECRYPTO_MANAGE_PACKAGE_DIR || true)"
     local existing_executable
@@ -363,6 +399,28 @@ resolve_runtime_config() {
   if ! was_provided ALLOWED_ORIGINS; then
     ALLOWED_ORIGINS="$(configured_allowed_origins || true)"
   fi
+
+  if ! was_provided SERVER_NAME; then
+    SERVER_NAME="$(env_value MUSICDECRYPTO_MANAGE_SERVER_NAME || true)"
+  fi
+
+  if ! was_provided SSL_CERTIFICATE; then
+    SSL_CERTIFICATE="$(env_value MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE || true)"
+  fi
+
+  if ! was_provided SSL_CERTIFICATE_KEY; then
+    SSL_CERTIFICATE_KEY="$(env_value MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE_KEY || true)"
+  fi
+
+  if ! was_provided NGINX_SITE_FILE; then
+    NGINX_SITE_FILE="$(env_value MUSICDECRYPTO_MANAGE_NGINX_SITE_FILE || true)"
+    NGINX_SITE_FILE="${NGINX_SITE_FILE:-/etc/nginx/sites-available/musicdecrypto.conf}"
+  fi
+
+  if ! was_provided FRONTEND_BUILD; then
+    FRONTEND_BUILD="$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_BUILD || true)"
+    FRONTEND_BUILD="${FRONTEND_BUILD:-1}"
+  fi
 }
 
 cmd_show_config() {
@@ -377,12 +435,19 @@ DATA_DIR=$DATA_DIR
 TEMP_DIR=$TEMP_DIR
 UPDATE_DIR=$UPDATE_DIR
 APPLY_DIR=$APPLY_DIR
+FRONTEND_SOURCE_DIR=$FRONTEND_SOURCE_DIR
+FRONTEND_DIR=$FRONTEND_DIR
 BIND_HOST=$BIND_HOST
 PORT=$PORT
 PACKAGE_ARCHIVE=$PACKAGE_ARCHIVE
 PACKAGE_DIR=$PACKAGE_DIR
 ENV_FILE=$ENV_FILE
 SERVICE_FILE=$SERVICE_FILE
+SERVER_NAME=$SERVER_NAME
+SSL_CERTIFICATE=$SSL_CERTIFICATE
+SSL_CERTIFICATE_KEY=$SSL_CERTIFICATE_KEY
+NGINX_SITE_FILE=$NGINX_SITE_FILE
+FRONTEND_BUILD=$FRONTEND_BUILD
 FORCE_OVERWRITE=$FORCE_OVERWRITE
 EXTENSIVE_DETECTION=$EXTENSIVE_DETECTION
 AUTO_DELETE_AFTER_DAYS=$AUTO_DELETE_AFTER_DAYS
@@ -495,6 +560,214 @@ cmd_extract_package() {
   chmod +x "$PACKAGE_DIR/musicdecrypto"
 }
 
+cmd_publish_frontend() {
+  resolve_runtime_config
+
+  local source_dist="$FRONTEND_SOURCE_DIR/dist"
+
+  [ -d "$FRONTEND_SOURCE_DIR" ] || fail "frontend source directory not found: $FRONTEND_SOURCE_DIR"
+  [ -f "$FRONTEND_SOURCE_DIR/package.json" ] || fail "frontend package.json not found: $FRONTEND_SOURCE_DIR/package.json"
+
+  if [ "$FRONTEND_BUILD" != "0" ]; then
+    have pnpm || fail "pnpm is required to build the frontend. Install pnpm or run with FRONTEND_BUILD=0 after preparing $source_dist."
+
+    log "Installing frontend dependencies"
+    pnpm -C "$FRONTEND_SOURCE_DIR" install --frozen-lockfile
+
+    log "Building frontend"
+    pnpm -C "$FRONTEND_SOURCE_DIR" build
+  fi
+
+  [ -f "$source_dist/index.html" ] || fail "frontend build output not found: $source_dist/index.html"
+
+  log "Publishing frontend to $FRONTEND_DIR"
+  rm -rf "$FRONTEND_DIR"
+  mkdir -p "$FRONTEND_DIR"
+  cp -a "$source_dist/." "$FRONTEND_DIR/"
+
+  if [ "${EUID:-$(id -u)}" -eq 0 ] && id "$SERVICE_USER" >/dev/null 2>&1; then
+    chown -R "$SERVICE_USER:$SERVICE_GROUP" "$FRONTEND_DIR"
+  fi
+}
+
+write_nginx_file() {
+  resolve_runtime_config
+
+  [ -n "$SERVER_NAME" ] || fail "SERVER_NAME is required for install-web, for example: SERVER_NAME=dec.example.com"
+  if { [ -n "$SSL_CERTIFICATE" ] && [ -z "$SSL_CERTIFICATE_KEY" ]; } ||
+    { [ -z "$SSL_CERTIFICATE" ] && [ -n "$SSL_CERTIFICATE_KEY" ]; }; then
+    fail "provide both SSL_CERTIFICATE and SSL_CERTIFICATE_KEY, or leave both empty"
+  fi
+
+  log "Writing $NGINX_SITE_FILE"
+  mkdir -p "$(dirname "$NGINX_SITE_FILE")"
+
+  if [ -n "$SSL_CERTIFICATE" ]; then
+    cat >"$NGINX_SITE_FILE" <<NGINX
+server {
+    listen 80;
+    server_name $SERVER_NAME;
+
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $SERVER_NAME;
+
+    ssl_certificate $SSL_CERTIFICATE;
+    ssl_certificate_key $SSL_CERTIFICATE_KEY;
+
+    root $FRONTEND_DIR;
+    index index.html;
+
+    client_max_body_size 0;
+
+    location /api/ {
+        proxy_pass http://$BIND_HOST:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location /files {
+        proxy_pass http://$BIND_HOST:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location /healthz {
+        proxy_pass http://$BIND_HOST:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location /update {
+        proxy_pass http://$BIND_HOST:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+}
+NGINX
+  else
+    cat >"$NGINX_SITE_FILE" <<NGINX
+server {
+    listen 80;
+    server_name $SERVER_NAME;
+
+    root $FRONTEND_DIR;
+    index index.html;
+
+    client_max_body_size 0;
+
+    location /api/ {
+        proxy_pass http://$BIND_HOST:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location /files {
+        proxy_pass http://$BIND_HOST:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location /healthz {
+        proxy_pass http://$BIND_HOST:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /update {
+        proxy_pass http://$BIND_HOST:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+}
+NGINX
+  fi
+
+  if [ -d /etc/nginx/sites-enabled ] && [[ "$NGINX_SITE_FILE" == /etc/nginx/sites-available/* ]]; then
+    ln -sf "$NGINX_SITE_FILE" "/etc/nginx/sites-enabled/$(basename "$NGINX_SITE_FILE")"
+  fi
+}
+
+cmd_install_web() {
+  require_root
+
+  cmd_publish_frontend
+  write_nginx_file
+
+  if have nginx; then
+    nginx -t
+    systemctl reload nginx
+  else
+    log "nginx command not found; install/reload your web server manually."
+  fi
+}
+
+cmd_install_all() {
+  require_root
+
+  cmd_install_service
+  cmd_install_web
+}
+
 ensure_service_user() {
   if ! getent group "$SERVICE_GROUP" >/dev/null; then
     groupadd --system "$SERVICE_GROUP"
@@ -532,6 +805,13 @@ MUSICDECRYPTO_MANAGE_PORT=$PORT
 MUSICDECRYPTO_MANAGE_APP_DIR=$APP_DIR
 MUSICDECRYPTO_MANAGE_PUBLISH_DIR=$PUBLISH_DIR
 MUSICDECRYPTO_MANAGE_PACKAGE_DIR=$PACKAGE_DIR
+MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR=$FRONTEND_SOURCE_DIR
+MUSICDECRYPTO_MANAGE_FRONTEND_DIR=$FRONTEND_DIR
+MUSICDECRYPTO_MANAGE_SERVER_NAME=$SERVER_NAME
+MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE=$SSL_CERTIFICATE
+MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE_KEY=$SSL_CERTIFICATE_KEY
+MUSICDECRYPTO_MANAGE_NGINX_SITE_FILE=$NGINX_SITE_FILE
+MUSICDECRYPTO_MANAGE_FRONTEND_BUILD=$FRONTEND_BUILD
 Kestrel__Endpoints__Http__Url=http://$BIND_HOST:$PORT
 MusicDecrypto__StorageRoot=$DATA_DIR
 MusicDecrypto__TempRoot=$TEMP_DIR
@@ -686,6 +966,9 @@ case "$command" in
   publish) cmd_publish ;;
   extract-package) cmd_extract_package ;;
   install-service) cmd_install_service ;;
+  publish-frontend) cmd_publish_frontend ;;
+  install-web) cmd_install_web ;;
+  install-all) cmd_install_all ;;
   configure) cmd_configure ;;
   start) cmd_start ;;
   stop) cmd_stop ;;

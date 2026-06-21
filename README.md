@@ -183,6 +183,53 @@ sudo systemctl reload nginx
 
 Edit `server_name example.com;` before enabling HTTPS.
 
+To deploy the frontend alongside the backend app directory and generate an Nginx site in one step:
+
+```bash
+sudo \
+  PORT=5081 \
+  SERVER_NAME=dec.example.com \
+  scripts/manage.sh install-web
+```
+
+The default frontend output is:
+
+```text
+$APP_DIR/frontend-dist
+```
+
+With the default traditional install path, that is:
+
+```text
+/opt/musicdecrypto/backend/frontend-dist
+```
+
+`install-web` builds `../frontend`, copies `dist/` into `FRONTEND_DIR`, writes `NGINX_SITE_FILE`, tests Nginx, and reloads it. `SERVER_NAME` is required at runtime. If your certificate is not in the Let's Encrypt default location, pass explicit paths:
+If `SSL_CERTIFICATE` and `SSL_CERTIFICATE_KEY` are omitted, the generated site listens on HTTP only. This is useful when HTTPS is managed by 1Panel or another outer reverse-proxy/certificate layer.
+
+If you want this generated Nginx site to terminate HTTPS itself, pass both certificate paths:
+
+```bash
+sudo \
+  PORT=5081 \
+  SERVER_NAME=dec.example.com \
+  SSL_CERTIFICATE=/path/to/fullchain.pem \
+  SSL_CERTIFICATE_KEY=/path/to/privkey.pem \
+  scripts/manage.sh install-web
+```
+
+To install backend service and frontend site together:
+
+```bash
+sudo \
+  API_KEY='replace-with-a-long-random-secret' \
+  PORT=5081 \
+  SERVER_NAME=dec.example.com \
+  scripts/manage.sh install-all
+```
+
+The generated Nginx site serves the frontend from `/` and proxies `/api/`, `/files`, `/healthz`, and `/update` to the local backend. In this same-origin deployment, leave the frontend backend-address setting empty.
+
 ## Notes
 
 - tus resumable upload files are stored under `TempRoot/tus`.
