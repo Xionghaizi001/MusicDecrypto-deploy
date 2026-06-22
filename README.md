@@ -68,20 +68,25 @@ Development helper commands:
 
 ```bash
 scripts/dev.sh server
-scripts/dev.sh pack --git HEAD~1..HEAD -o /tmp/update.zip
-scripts/dev.sh pack --files Program.cs src/Updates/UpdateEndpoints.cs -o /tmp/update.zip
+scripts/dev.sh pack -o /tmp/update.zip
+scripts/dev.sh pack --backend --git HEAD~1..HEAD -o /tmp/backend-update.zip
+scripts/dev.sh pack --frontend --git HEAD -o /tmp/frontend-update.zip
+scripts/dev.sh pack --backend --files Program.cs src/Updates/UpdateEndpoints.cs -o /tmp/update.zip
 ```
 
 `scripts/dev.sh server` uses the normally installed `dotnet` from `PATH`. If it is installed in a custom location, run it with `DOTNET_BIN=/path/to/dotnet`.
+
+`scripts/dev.sh pack` scans the backend and frontend Git repositories and packages the latest commit from both by default. Use `--backend` or `--frontend` to limit the target. `--git` may be passed without a value for the latest commit, or with a single commit or range such as `HEAD`, `abc1234`, or `HEAD~3..HEAD`.
 
 The update package format is a zip with this root structure:
 
 ```text
 musicdecrypto-update.json
-files/<relative target paths>
+files/backend/<relative backend paths>
+files/frontend/<relative frontend paths>
 ```
 
-The manifest format is `musicdecrypto.update.v1` and lists each target path, package source path, file size, and SHA-256. The backend verifies the manifest before applying files.
+The manifest format is `musicdecrypto.update.v1` and lists each target, target path, package source path, file size, and SHA-256. The backend verifies the manifest, then applies a backend update, frontend update, or both based on package contents. Backend updates copy into `UpdateApplyRoot`, run `scripts/manage.sh publish`, and restart the service. Frontend updates copy into `MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR` (default `../frontend`) and run `scripts/manage.sh publish-frontend`.
 
 ## VPS Deployment
 
@@ -273,7 +278,7 @@ The generated Nginx site serves the frontend from `/` and proxies `/api/`, `/fil
 - Uploaded files are copied into `StorageRoot/uploads`.
 - Decrypted files are written under `StorageRoot/outputs/{jobId}`.
 - Files uploaded through `/update` are stored under `UpdateRoot/{batchId}`.
-- Applying a batch copies manifest-listed files into `UpdateApplyRoot`, which defaults to the app directory used by the systemd service. The `/update` apply action then runs `scripts/manage.sh publish` in the background and stops the app; with the generated systemd unit, `Restart=always` starts the newly published service.
+- Applying a batch copies files by manifest target: `backend` goes into `UpdateApplyRoot`, and `frontend` goes into `MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR`. The apply action then runs `scripts/manage.sh publish`, `scripts/manage.sh publish-frontend`, or both based on the included targets. The app is stopped for systemd `Restart=always` only when a backend update is included.
 - Job state is stored in `StorageRoot/state/jobs.json`.
 - Completed and failed jobs are automatically deleted after `AutoDeleteAfterDays` days. The default is `7`; set `AUTO_DELETE_AFTER_DAYS=0` with `scripts/manage.sh configure` to disable automatic deletion.
 - The current worker processes jobs one at a time, which is conservative for CPU and disk usage on a small VPS.

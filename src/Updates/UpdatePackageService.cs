@@ -8,6 +8,8 @@ internal static class UpdatePackageService
 {
     public const string ManifestFileName = "musicdecrypto-update.json";
     private const string ManifestFormat = "musicdecrypto.update.v1";
+    public const string BackendTarget = "backend";
+    public const string FrontendTarget = "frontend";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -80,7 +82,7 @@ internal static class UpdatePackageService
 
     public static async Task<UpdateApplyResult> ApplyAsync(
         string updateRoot,
-        string applyRoot,
+        IReadOnlyDictionary<string, string> applyRoots,
         string batchId,
         CancellationToken cancellationToken)
     {
@@ -91,12 +93,27 @@ internal static class UpdatePackageService
         }
 
         var manifest = ReadManifest(batchDirectory);
-        Directory.CreateDirectory(applyRoot);
-        var fullApplyRoot = Path.GetFullPath(applyRoot);
+        var fullApplyRoots = applyRoots.ToDictionary(
+            pair => NormalizeTarget(pair.Key),
+            pair => Path.GetFullPath(pair.Value),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var applyRoot in fullApplyRoots.Values)
+        {
+            Directory.CreateDirectory(applyRoot);
+        }
+
         var appliedFiles = new List<UpdateAppliedFile>();
+        var appliedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var file in manifest.Files)
         {
+            var target = NormalizeTarget(file.Target);
+            if (!fullApplyRoots.TryGetValue(target, out var fullApplyRoot))
+            {
+                throw new InvalidOperationException($"Unsupported update target: {target}.");
+            }
+
             var sourceRelativePath = RelativePathSanitizer.Sanitize(file.Source);
             var targetRelativePath = RelativePathSanitizer.Sanitize(file.Path);
             var sourcePath = Path.GetFullPath(Path.Combine(batchDirectory, sourceRelativePath));
@@ -129,10 +146,19 @@ internal static class UpdatePackageService
             }
 
             File.Copy(sourcePath, targetPath, overwrite: true);
-            appliedFiles.Add(new UpdateAppliedFile(targetRelativePath.Replace('\\', '/'), sourceInfo.Length, actualSha256));
+            appliedTargets.Add(target);
+            appliedFiles.Add(new UpdateAppliedFile(
+                target,
+                targetRelativePath.Replace('\\', '/'),
+                sourceInfo.Length,
+                actualSha256));
         }
 
-        return new UpdateApplyResult(batchId, fullApplyRoot, appliedFiles);
+        return new UpdateApplyResult(
+            batchId,
+            fullApplyRoots,
+            appliedTargets.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+            appliedFiles);
     }
 
     public static UpdateDeleteResult Delete(string updateRoot, string batchId)
@@ -174,7 +200,7 @@ internal static class UpdatePackageService
             await using var target = File.Create(targetPath);
             await source.CopyToAsync(target, cancellationToken);
 
-            savedFiles.Add(new UpdateUploadedFile(relativePath, file.Length));
+            savedFiles.Add(new UpdateUploadedFile(relativePath, file.Length, BackendTarget));
         }
     }
 
@@ -221,7 +247,10 @@ internal static class UpdatePackageService
         var manifest = ReadManifest(batchDirectory);
         foreach (var manifestFile in manifest.Files)
         {
-            savedFiles.Add(new UpdateUploadedFile(manifestFile.Path, manifestFile.Size));
+            savedFiles.Add(new UpdateUploadedFile(
+                manifestFile.Path,
+                manifestFile.Size,
+                NormalizeTarget(manifestFile.Target)));
         }
     }
 
@@ -236,7 +265,7 @@ internal static class UpdatePackageService
             var source = $"files/{file.Path}";
             var sourcePath = Path.Combine(batchDirectory, source);
             var sha256 = await ComputeSha256Async(sourcePath, cancellationToken);
-            manifestFiles.Add(new UpdateManifestFile(file.Path, source, file.Size, sha256));
+            manifestFiles.Add(new UpdateManifestFile(file.Path, source, file.Size, sha256, file.Target));
         }
 
         var manifest = new UpdateManifest(ManifestFormat, DateTimeOffset.UtcNow, Source: null, manifestFiles);
@@ -292,6 +321,21 @@ internal static class UpdatePackageService
     private static bool IsZip(string fileName)
     {
         return string.Equals(Path.GetExtension(fileName), ".zip", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static string NormalizeTarget(string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return BackendTarget;
+        }
+
+        return target.Trim().ToLowerInvariant() switch
+        {
+            BackendTarget => BackendTarget,
+            FrontendTarget => FrontendTarget,
+            var value => throw new InvalidOperationException($"Unsupported update target: {value}.")
+        };
     }
 
     private static void EnsureInside(string root, string path, string label)

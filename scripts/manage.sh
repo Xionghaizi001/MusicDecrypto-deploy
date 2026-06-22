@@ -1256,7 +1256,7 @@ RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=-$DATA_DIR -$TEMP_DIR -$UPDATE_DIR -$APPLY_DIR
+ReadWritePaths=-$DATA_DIR -$TEMP_DIR -$UPDATE_DIR -$APPLY_DIR -$FRONTEND_SOURCE_DIR -$FRONTEND_DIR
 
 [Install]
 WantedBy=multi-user.target

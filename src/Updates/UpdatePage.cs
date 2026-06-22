@@ -224,12 +224,17 @@ internal static class UpdatePage
       if (!source || source.type !== 'git') return '';
       const commits = source.commits || [];
       const commitItems = commits.map(commit => {
-        const title = `${commit.shortHash || ''} ${commit.subject || ''}`.trim();
+        const target = commit.target ? `[${commit.target}] ` : '';
+        const title = `${target}${commit.shortHash || ''} ${commit.subject || ''}`.trim();
         const body = commit.body ? `<div class="meta">${escapeHtml(commit.body)}</div>` : '';
         return `<li><strong>${escapeHtml(title)}</strong>${body}</li>`;
       }).join('');
+      const repositories = (source.repositories || [])
+        .map(repository => `${repository.target || 'backend'}: ${repository.range || ''}`)
+        .join(', ');
       return `
         <div class="meta">git: ${escapeHtml(source.range || '')}</div>
+        ${repositories ? `<div class="meta">repos: ${escapeHtml(repositories)}</div>` : ''}
         ${commitItems ? `<ul class="commits">${commitItems}</ul>` : ''}
       `;
     }
@@ -245,7 +250,7 @@ internal static class UpdatePage
     function renderFileList(files) {
       if (!files?.length) return '';
       return `<ul>${files.map(file => `
-        <li><code>${escapeHtml(file.path || '')}</code> · ${formatBytes(file.size || 0)}</li>
+        <li><code>[${escapeHtml(file.target || 'backend')}] ${escapeHtml(file.path || '')}</code> · ${formatBytes(file.size || 0)}</li>
       `).join('')}</ul>`;
     }
 
@@ -263,10 +268,14 @@ internal static class UpdatePage
       const deploymentText = deployment
         ? `<div>Deployment: ${escapeHtml(deployment.status)}${deployment.logPath ? ` · log: <code>${escapeHtml(deployment.logPath)}</code>` : ''}</div>`
         : '';
+      const applyRoots = Object.entries(result.applyRoots || {})
+        .map(([target, path]) => `${target}: ${path}`)
+        .join(', ');
       return `
         <strong>Update applied</strong>
         <div>Batch: <code>${escapeHtml(result.batchId || '')}</code></div>
-        <div>Apply root: <code>${escapeHtml(result.applyRoot || '')}</code></div>
+        <div>Targets: <code>${escapeHtml((result.targets || []).join(', ') || 'backend')}</code></div>
+        <div>Apply roots: <code>${escapeHtml(applyRoots)}</code></div>
         <div>${(result.files || []).length} files replaced.</div>
         ${deploymentText}
         ${renderFileList(result.files || [])}
@@ -299,7 +308,7 @@ internal static class UpdatePage
             <div class="meta">${item.directory}</div>
             ${formatSource(item.source)}
             <div class="row">
-              <button type="button" data-action="apply" data-id="${item.batchId}">Apply + Publish + Restart</button>
+              <button type="button" data-action="apply" data-id="${item.batchId}">Apply Update</button>
               <button type="button" class="danger" data-action="delete" data-id="${item.batchId}">Delete</button>
             </div>
           `;

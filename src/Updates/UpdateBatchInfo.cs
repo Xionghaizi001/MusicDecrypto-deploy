@@ -11,11 +11,12 @@ internal sealed record UpdateBatchInfo(
 
 internal sealed record UpdateApplyResult(
     string BatchId,
-    string ApplyRoot,
+    IReadOnlyDictionary<string, string> ApplyRoots,
+    IReadOnlyCollection<string> Targets,
     IReadOnlyCollection<UpdateAppliedFile> Files,
     UpdateDeploymentResult? Deployment = null);
 
-internal sealed record UpdateAppliedFile(string Path, long Size, string Sha256);
+internal sealed record UpdateAppliedFile(string Target, string Path, long Size, string Sha256);
 
 internal sealed record UpdateDeleteResult(string BatchId, bool Deleted);
 

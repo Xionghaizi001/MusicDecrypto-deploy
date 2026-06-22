@@ -68,20 +68,25 @@ scripts/tus-upload.sh http://127.0.0.1:5080 ./sample.ncm
 
 ```bash
 scripts/dev.sh server
-scripts/dev.sh pack --git HEAD~1..HEAD -o /tmp/update.zip
-scripts/dev.sh pack --files Program.cs src/Updates/UpdateEndpoints.cs -o /tmp/update.zip
+scripts/dev.sh pack -o /tmp/update.zip
+scripts/dev.sh pack --backend --git HEAD~1..HEAD -o /tmp/backend-update.zip
+scripts/dev.sh pack --frontend --git HEAD -o /tmp/frontend-update.zip
+scripts/dev.sh pack --backend --files Program.cs src/Updates/UpdateEndpoints.cs -o /tmp/update.zip
 ```
 
 `scripts/dev.sh server` 会使用 `PATH` 中正常安装的 `dotnet`。如果 dotnet 安装在自定义路径，可通过 `DOTNET_BIN=/path/to/dotnet` 指定。
+
+`scripts/dev.sh pack` 默认扫描后端和前端两个独立 Git 仓库的最近一次提交并自动打包。可以用 `--backend` 或 `--frontend` 限定目标；`--git` 可不带参数表示最近一次提交，也可传入单个提交或提交范围，例如 `HEAD`、`abc1234`、`HEAD~3..HEAD`。
 
 更新包是一个 zip，根目录结构如下：
 
 ```text
 musicdecrypto-update.json
-files/<relative target paths>
+files/backend/<relative backend paths>
+files/frontend/<relative frontend paths>
 ```
 
-清单格式是 `musicdecrypto.update.v1`，会列出每个目标路径、包内源路径、文件大小和 SHA-256。后端会先校验清单，再应用文件。
+清单格式是 `musicdecrypto.update.v1`，会列出每个目标、目标路径、包内源路径、文件大小和 SHA-256。后端会先校验清单，再按清单中的内容决定应用后端更新、前端更新或两者。后端更新会复制到 `UpdateApplyRoot` 并运行 `scripts/manage.sh publish` 后重启服务；前端更新会复制到 `MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR`（未配置时为 `../frontend`）并运行 `scripts/manage.sh publish-frontend`。
 
 ## VPS 部署
 
@@ -273,7 +278,7 @@ sudo \
 - 上传文件会复制到 `StorageRoot/uploads`。
 - 解锁产物会写入 `StorageRoot/outputs/{jobId}`。
 - 通过 `/update` 上传的文件会保存在 `UpdateRoot/{batchId}`。
-- 应用更新批次时，后端会把清单列出的文件复制到 `UpdateApplyRoot`。默认情况下，`UpdateApplyRoot` 是 systemd 服务使用的应用目录。`/update` 的应用操作随后会在后台运行 `scripts/manage.sh publish` 并停止应用；配合生成的 systemd unit 中的 `Restart=always`，服务会用新发布的版本自动启动。
+- 应用更新批次时，后端会按清单 target 复制文件：`backend` 复制到 `UpdateApplyRoot`，`frontend` 复制到 `MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR`。随后按实际 target 运行 `scripts/manage.sh publish`、`scripts/manage.sh publish-frontend` 或两者；只有包含后端更新时才会停止应用并依靠 systemd `Restart=always` 重启。
 - 任务状态保存在 `StorageRoot/state/jobs.json`。
 - 已完成和失败的任务会在 `AutoDeleteAfterDays` 天后自动删除。默认值是 `7`；如果想关闭自动删除，可执行 `AUTO_DELETE_AFTER_DAYS=0 scripts/manage.sh configure`。
 - 当前 worker 一次只处理一个任务。这个策略对小 VPS 的 CPU 和磁盘压力更保守。

@@ -83,8 +83,9 @@ internal static class UpdateEndpoints
         var paths = AppPaths.From(options.Value, environment.ContentRootPath);
         try
         {
-            var result = await UpdatePackageService.ApplyAsync(paths.Updates, paths.UpdateApplyRoot, batchId, cancellationToken);
-            var deploymentResult = deployment.SchedulePublishAndRestart();
+            var applyRoots = GetUpdateApplyRoots(paths.UpdateApplyRoot, environment.ContentRootPath);
+            var result = await UpdatePackageService.ApplyAsync(paths.Updates, applyRoots, batchId, cancellationToken);
+            var deploymentResult = deployment.Schedule(result.Targets);
             return TypedResults.Ok(result with { Deployment = deploymentResult });
         }
         catch (DirectoryNotFoundException)
@@ -110,5 +111,20 @@ internal static class UpdateEndpoints
 
         var paths = AppPaths.From(options.Value, environment.ContentRootPath);
         return TypedResults.Ok(UpdatePackageService.Delete(paths.Updates, batchId));
+    }
+
+    private static IReadOnlyDictionary<string, string> GetUpdateApplyRoots(string backendApplyRoot, string contentRoot)
+    {
+        var frontendRoot = Environment.GetEnvironmentVariable("MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR");
+        if (string.IsNullOrWhiteSpace(frontendRoot))
+        {
+            frontendRoot = Path.GetFullPath(Path.Combine(contentRoot, "..", "frontend"));
+        }
+
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [UpdatePackageService.BackendTarget] = backendApplyRoot,
+            [UpdatePackageService.FrontendTarget] = frontendRoot
+        };
     }
 }
