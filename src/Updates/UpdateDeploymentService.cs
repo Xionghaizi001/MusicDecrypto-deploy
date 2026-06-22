@@ -9,6 +9,28 @@ internal sealed class UpdateDeploymentService(
     IHostApplicationLifetime lifetime,
     ILogger<UpdateDeploymentService> logger)
 {
+    private static readonly IReadOnlyDictionary<string, string> ManageEnvironmentAliases =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["MUSICDECRYPTO_MANAGE_BIND_HOST"] = "BIND_HOST",
+            ["MUSICDECRYPTO_MANAGE_PORT"] = "PORT",
+            ["MUSICDECRYPTO_MANAGE_APP_DIR"] = "APP_DIR",
+            ["MUSICDECRYPTO_MANAGE_PUBLISH_DIR"] = "PUBLISH_DIR",
+            ["MUSICDECRYPTO_MANAGE_DATA_DIR"] = "DATA_DIR",
+            ["MUSICDECRYPTO_MANAGE_PACKAGE_DIR"] = "PACKAGE_DIR",
+            ["MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR"] = "FRONTEND_SOURCE_DIR",
+            ["MUSICDECRYPTO_MANAGE_FRONTEND_DIR"] = "FRONTEND_DIR",
+            ["MUSICDECRYPTO_MANAGE_SERVER_NAME"] = "SERVER_NAME",
+            ["MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE"] = "SSL_CERTIFICATE",
+            ["MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE_KEY"] = "SSL_CERTIFICATE_KEY",
+            ["MUSICDECRYPTO_MANAGE_NGINX_SITE_FILE"] = "NGINX_SITE_FILE",
+            ["MUSICDECRYPTO_MANAGE_NGINX_USER"] = "NGINX_USER",
+            ["MUSICDECRYPTO_MANAGE_FRONTEND_BUILD"] = "FRONTEND_BUILD",
+            ["MUSICDECRYPTO_MANAGE_FRONTEND_BUILD_USER"] = "FRONTEND_BUILD_USER",
+            ["MUSICDECRYPTO_MANAGE_NODE_BIN"] = "NODE_BIN",
+            ["MUSICDECRYPTO_MANAGE_PNPM_BIN"] = "PNPM_BIN"
+        };
+
     private int _isRunning;
     private string? _currentLogPath;
 
@@ -132,8 +154,7 @@ internal sealed class UpdateDeploymentService(
         startInfo.ArgumentList.Add("bash");
         startInfo.ArgumentList.Add(manageScript);
         startInfo.ArgumentList.Add(command);
-        startInfo.Environment["APP_DIR"] = appRoot;
-        startInfo.Environment["PUBLISH_DIR"] = publishDir;
+        ConfigureManageEnvironment(startInfo, appRoot, publishDir);
 
         using var process = Process.Start(startInfo);
         if (process is null)
@@ -161,6 +182,21 @@ internal sealed class UpdateDeploymentService(
         }
 
         return process.ExitCode;
+    }
+
+    private static void ConfigureManageEnvironment(ProcessStartInfo startInfo, string appRoot, string publishDir)
+    {
+        foreach (var (sourceKey, targetKey) in ManageEnvironmentAliases)
+        {
+            var value = Environment.GetEnvironmentVariable(sourceKey);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                startInfo.Environment[targetKey] = value;
+            }
+        }
+
+        startInfo.Environment["APP_DIR"] = appRoot;
+        startInfo.Environment["PUBLISH_DIR"] = publishDir;
     }
 
     private static async Task AppendLogAsync(string logPath, string message)
