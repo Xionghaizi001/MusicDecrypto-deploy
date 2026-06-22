@@ -730,6 +730,16 @@ server {
         alias $DATA_DIR/outputs/;
     }
 
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+        try_files /index.html =404;
+    }
+
+    location = /sw.js {
+        add_header Cache-Control "no-cache";
+        try_files /sw.js =404;
+    }
+
     location ^~ /api {
         proxy_pass http://$BIND_HOST:$PORT;
         proxy_http_version 1.1;
@@ -798,6 +808,16 @@ server {
     location /_musicdecrypto_outputs/ {
         internal;
         alias $DATA_DIR/outputs/;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+        try_files /index.html =404;
+    }
+
+    location = /sw.js {
+        add_header Cache-Control "no-cache";
+        try_files /sw.js =404;
     }
 
     location ^~ /api {
