@@ -9,3 +9,7 @@ update-*.zip
 *.user
 *.suo
 .vs/
+.codex
+.agents
+.claude
+.gemini
