@@ -730,7 +730,7 @@ server {
         alias $DATA_DIR/outputs/;
     }
 
-    location /api/ {
+    location ^~ /api {
         proxy_pass http://$BIND_HOST:$PORT;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -743,7 +743,7 @@ server {
         proxy_send_timeout 3600s;
     }
 
-    location /files {
+    location ^~ /files {
         proxy_pass http://$BIND_HOST:$PORT;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -756,7 +756,7 @@ server {
         proxy_send_timeout 3600s;
     }
 
-    location /healthz {
+    location = /healthz {
         proxy_pass http://$BIND_HOST:$PORT;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -765,7 +765,7 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
 
-    location /update {
+    location ^~ /update {
         proxy_pass http://$BIND_HOST:$PORT;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -800,7 +800,7 @@ server {
         alias $DATA_DIR/outputs/;
     }
 
-    location /api/ {
+    location ^~ /api {
         proxy_pass http://$BIND_HOST:$PORT;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -813,7 +813,7 @@ server {
         proxy_send_timeout 3600s;
     }
 
-    location /files {
+    location ^~ /files {
         proxy_pass http://$BIND_HOST:$PORT;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -826,7 +826,7 @@ server {
         proxy_send_timeout 3600s;
     }
 
-    location /healthz {
+    location = /healthz {
         proxy_pass http://$BIND_HOST:$PORT;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -835,7 +835,7 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    location /update {
+    location ^~ /update {
         proxy_pass http://$BIND_HOST:$PORT;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
