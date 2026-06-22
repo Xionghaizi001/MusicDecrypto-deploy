@@ -10,6 +10,8 @@ using tusdotnet.Stores;
 
 var builder = WebApplication.CreateBuilder(args);
 
+const int LargeFileBufferSize = 1024 * 1024;
+
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = null;
@@ -88,29 +90,40 @@ app.MapGet("/api/jobs/{id}", Results<Ok<JobRecord>, NotFound> (string id, JobSto
     return job is null ? TypedResults.NotFound() : TypedResults.Ok(job);
 });
 
-app.MapGet("/api/jobs/{id}/download", Results<PhysicalFileHttpResult, NotFound, BadRequest<string>> (
+app.MapGet("/api/jobs/{id}/download", IResult (
     string id,
     JobStore jobs,
-    HttpContext httpContext) =>
+    HttpContext httpContext,
+    IOptions<AppOptions> options,
+    IWebHostEnvironment environment) =>
 {
     var job = jobs.Get(id);
     if (job is null)
     {
-        return TypedResults.NotFound();
+        return Results.NotFound();
     }
 
     if (job.Status != JobStatus.Completed || string.IsNullOrWhiteSpace(job.OutputPath))
     {
-        return TypedResults.BadRequest("Job is not completed.");
+        return Results.BadRequest("Job is not completed.");
     }
 
     if (!File.Exists(job.OutputPath))
     {
-        return TypedResults.NotFound();
+        return Results.NotFound();
     }
 
     httpContext.Response.Headers[HeaderNames.ContentDisposition] =
         BuildContentDisposition(Path.GetFileName(job.OutputPath));
+
+    var paths = AppPaths.From(options.Value, environment.ContentRootPath);
+    var xAccelRedirect = BuildXAccelRedirect(job.OutputPath, paths.Outputs);
+    if (xAccelRedirect is not null)
+    {
+        httpContext.Response.Headers["X-Accel-Redirect"] = xAccelRedirect;
+        httpContext.Response.ContentType = "application/octet-stream";
+        return TypedResults.Empty;
+    }
 
     return TypedResults.PhysicalFile(
         job.OutputPath,
@@ -134,7 +147,10 @@ app.UseTus(httpContext =>
     return new DefaultTusConfiguration
     {
         UrlPath = "/files",
-        Store = new TusDiskStore(paths.TusStore),
+        Store = new TusDiskStore(
+            paths.TusStore,
+            deletePartialFilesOnConcat: true,
+            bufferSize: new TusDiskBufferSize(LargeFileBufferSize, LargeFileBufferSize)),
         Events = new Events
         {
             OnFileCompleteAsync = async eventContext =>
@@ -161,9 +177,15 @@ app.UseTus(httpContext =>
                         inputPath);
 
                     await using (var source = await file.GetContentAsync(eventContext.CancellationToken))
-                    await using (var target = File.Create(inputPath))
+                    await using (var target = new FileStream(
+                                     inputPath,
+                                     FileMode.Create,
+                                     FileAccess.Write,
+                                     FileShare.None,
+                                     LargeFileBufferSize,
+                                     FileOptions.Asynchronous | FileOptions.SequentialScan))
                     {
-                        await source.CopyToAsync(target, eventContext.CancellationToken);
+                        await source.CopyToAsync(target, LargeFileBufferSize, eventContext.CancellationToken);
                     }
 
                     var inputBytes = new FileInfo(inputPath).Length;
@@ -237,4 +259,22 @@ static string BuildAsciiFileNameFallback(string fileName)
         .Trim();
 
     return string.IsNullOrWhiteSpace(fallback) ? "download.bin" : fallback;
+}
+
+static string? BuildXAccelRedirect(string outputPath, string outputsRoot)
+{
+    var fullOutputPath = Path.GetFullPath(outputPath);
+    var fullOutputsRoot = Path.GetFullPath(outputsRoot);
+    var relativePath = Path.GetRelativePath(fullOutputsRoot, fullOutputPath);
+
+    if (relativePath.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relativePath))
+    {
+        return null;
+    }
+
+    var segments = relativePath
+        .Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries)
+        .Select(Uri.EscapeDataString);
+
+    return $"/_musicdecrypto_outputs/{string.Join('/', segments)}";
 }

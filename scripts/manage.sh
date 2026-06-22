@@ -725,6 +725,11 @@ server {
 
     client_max_body_size 0;
 
+    location /_musicdecrypto_outputs/ {
+        internal;
+        alias $DATA_DIR/outputs/;
+    }
+
     location /api/ {
         proxy_pass http://$BIND_HOST:$PORT;
         proxy_http_version 1.1;
@@ -789,6 +794,11 @@ server {
     index index.html;
 
     client_max_body_size 0;
+
+    location /_musicdecrypto_outputs/ {
+        internal;
+        alias $DATA_DIR/outputs/;
+    }
 
     location /api/ {
         proxy_pass http://$BIND_HOST:$PORT;
