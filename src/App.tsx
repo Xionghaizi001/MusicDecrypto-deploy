@@ -15,6 +15,7 @@ import {
   fetchJobDownload,
   fetchJobs,
   normalizeApiBaseUrl,
+  sanitizeTextInput,
   type JobDownloadProgress
 } from './lib/api';
 import {
@@ -76,18 +77,18 @@ type NavigatorWithStandalone = Navigator & {
 function readStoredApiKey(): string {
   try {
     const storedApiKey = window.localStorage.getItem(apiKeyStorageKey);
-    return storedApiKey ?? import.meta.env.VITE_API_KEY ?? '';
+    return sanitizeTextInput(storedApiKey ?? import.meta.env.VITE_API_KEY ?? '').trim();
   } catch {
-    return import.meta.env.VITE_API_KEY ?? '';
+    return sanitizeTextInput(import.meta.env.VITE_API_KEY ?? '').trim();
   }
 }
 
 function readStoredApiBaseUrl(): string {
   try {
     const storedApiBaseUrl = window.localStorage.getItem(apiBaseUrlStorageKey);
-    return storedApiBaseUrl ?? import.meta.env.VITE_API_BASE_URL ?? '';
+    return sanitizeTextInput(storedApiBaseUrl ?? import.meta.env.VITE_API_BASE_URL ?? '');
   } catch {
-    return import.meta.env.VITE_API_BASE_URL ?? '';
+    return sanitizeTextInput(import.meta.env.VITE_API_BASE_URL ?? '');
   }
 }
 
@@ -765,7 +766,7 @@ function App() {
                     <span>后端地址</span>
                     <input
                       value={apiBaseUrl}
-                      onChange={(event) => setApiBaseUrl(event.target.value)}
+                      onChange={(event) => setApiBaseUrl(sanitizeTextInput(event.target.value))}
                       placeholder="例如 api.example.com 或 127.0.0.1:5000"
                       type="text"
                     />
@@ -774,7 +775,7 @@ function App() {
                     <span>API Key</span>
                     <input
                       value={apiKey}
-                      onChange={(event) => setApiKey(event.target.value)}
+                      onChange={(event) => setApiKey(sanitizeTextInput(event.target.value).trim())}
                       placeholder="未配置后端密钥时可留空"
                       type="password"
                     />
@@ -939,12 +940,6 @@ function App() {
                     <strong>{job.originalFileName}</strong>
                     <span>{job.status}</span>
                     {job.error ? <p className="job-error">{job.error}</p> : null}
-                    {job.log ? (
-                      <details className="job-log">
-                        <summary>日志</summary>
-                        <pre>{job.log}</pre>
-                      </details>
-                    ) : null}
                   </div>
                   <div className="job-actions">
                     {job.status === 'Completed' ? (

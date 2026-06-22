@@ -32,7 +32,8 @@ export async function fetchJobDownload(
   auth: ApiAuth,
   onProgress?: (progress: JobDownloadProgress) => void
 ): Promise<JobDownload> {
-  const response = await fetch(buildApiUrl(`/api/jobs/${id}/download`, auth), {
+  const jobId = normalizeJobId(id);
+  const response = await fetch(buildApiUrl(`/api/jobs/${jobId}/download`, auth), {
     headers: authHeaders(auth)
   });
 
@@ -41,7 +42,7 @@ export async function fetchJobDownload(
   }
 
   const blob = await readDownloadBlob(response, onProgress);
-  const filename = normalizeDownloadedFilename(getDownloadFilename(response) ?? `${id}.bin`, id);
+  const filename = normalizeDownloadedFilename(getDownloadFilename(response) ?? `${jobId}.bin`, jobId);
 
   return {
     blob,
@@ -110,7 +111,8 @@ function parseContentLength(value: string | null): number | null {
 }
 
 export async function deleteJob(id: string, auth: ApiAuth): Promise<JobDeleteResult> {
-  const response = await fetch(buildApiUrl(`/api/jobs/${id}/delete`, auth), {
+  const jobId = normalizeJobId(id);
+  const response = await fetch(buildApiUrl(`/api/jobs/${jobId}/delete`, auth), {
     method: 'POST',
     headers: authHeaders(auth)
   });
@@ -129,7 +131,8 @@ export function buildApiUrl(path: string, auth: ApiAuth): string {
 }
 
 export function authHeaders(auth: ApiAuth): Record<string, string> {
-  return auth.apiKey ? { 'X-Api-Key': auth.apiKey } : {};
+  const apiKey = sanitizeTextInput(auth.apiKey).trim();
+  return apiKey ? { 'X-Api-Key': apiKey } : {};
 }
 
 async function request<T>(path: string, auth: ApiAuth): Promise<T> {
@@ -152,7 +155,7 @@ function trimTrailingSlash(value: string): string {
 }
 
 export function normalizeApiBaseUrl(value: string): string {
-  const trimmed = trimTrailingSlash(value.trim());
+  const trimmed = trimTrailingSlash(sanitizeTextInput(value).trim());
 
   if (!trimmed) {
     return '';
@@ -163,6 +166,20 @@ export function normalizeApiBaseUrl(value: string): string {
   }
 
   return `${window.location.protocol}//${trimmed}`;
+}
+
+export function sanitizeTextInput(value: string): string {
+  return value.replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]/gu, '');
+}
+
+function normalizeJobId(id: string): string {
+  const normalized = sanitizeTextInput(id).trim().toLowerCase();
+
+  if (!/^[a-f0-9]{32}$/.test(normalized)) {
+    throw new Error('Invalid job id');
+  }
+
+  return normalized;
 }
 
 function getDownloadFilename(response: Response): string | null {

@@ -13,13 +13,9 @@ export type JobStatus = 'Queued' | 'Running' | 'Completed' | 'Failed';
 
 export type JobRecord = {
   id: string;
-  tusFileId: string;
   originalFileName: string;
-  inputPath: string;
-  outputPath: string | null;
   status: JobStatus;
   error: string | null;
-  log: string | null;
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
@@ -28,8 +24,8 @@ export type JobRecord = {
 
 export type JobDeleteResult = {
   jobId: string;
-  deletedPaths: string[];
-  missingPaths: string[];
+  deletedCount: number;
+  missingCount: number;
 };
 
 export type UploadProgress = {

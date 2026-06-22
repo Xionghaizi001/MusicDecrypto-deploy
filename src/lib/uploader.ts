@@ -5,7 +5,6 @@ import type { ApiAuth, UploadProgress } from '../types/backend';
 
 type UploadMeta = {
   filename?: string;
-  filetype?: string;
 };
 
 export async function uploadFiles(
@@ -55,7 +54,7 @@ async function uploadFile(
   }).use(Tus, {
     endpoint: buildApiUrl('/files', auth),
     headers: authHeaders(auth),
-    allowedMetaFields: ['filename', 'filetype'],
+    allowedMetaFields: ['filename'],
     retryDelays: [0, 1000, 3000, 5000]
   });
 
@@ -81,8 +80,7 @@ async function uploadFile(
       type: file.type,
       data: file,
       meta: {
-        filename: file.name,
-        filetype: file.type
+        filename: file.name
       }
     });
 

@@ -293,7 +293,10 @@ function getPickerWindow(): FilePickerWindow {
 }
 
 function sanitizeStorageFilename(filename: string): string {
-  const sanitized = filename.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim();
+  const sanitized = filename
+    .replace(/[<>:"/\\|?*]/g, '_')
+    .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]/gu, '_')
+    .trim();
   return sanitized || 'download.bin';
 }
 

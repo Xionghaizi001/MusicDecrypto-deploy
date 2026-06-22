@@ -599,30 +599,6 @@ progress {
   overflow-wrap: anywhere;
 }
 
-.job-log {
-  color: #334155;
-  font-size: 13px;
-  max-width: 100%;
-}
-
-.job-log summary {
-  cursor: pointer;
-  font-weight: 700;
-}
-
-.job-log pre {
-  overflow: auto;
-  max-width: 100%;
-  max-height: 220px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  background: #f8fafc;
-  margin: 6px 0 0;
-  padding: 10px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .error {
   color: #b91c1c;
   font-weight: 700;
