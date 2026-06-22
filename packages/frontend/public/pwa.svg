@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="MusicDecrypto">
+  <rect width="512" height="512" rx="96" fill="#0f172a"/>
+  <path d="M164 330c0-35 28-63 63-63h123v42H227a21 21 0 1 0 21 21v-148l146-31v161c0 35-28 63-63 63s-63-28-63-63 28-63 63-63h21v-46l-62 13v114c0 35-28 63-63 63s-63-28-63-63Z" fill="#38bdf8"/>
+  <path d="M118 166c0-34 28-62 62-62h56v42h-56c-11 0-20 9-20 20v48h-42v-48Zm276 200v-48h42v48c0 34-28 62-62 62h-56v-42h56c11 0 20-9 20-20Z" fill="#f8fafc"/>
+</svg>
