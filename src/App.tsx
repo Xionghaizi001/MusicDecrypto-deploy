@@ -14,7 +14,8 @@ import {
   fetchHealth,
   fetchJobDownload,
   fetchJobs,
-  normalizeApiBaseUrl
+  normalizeApiBaseUrl,
+  type JobDownloadProgress
 } from './lib/api';
 import {
   authorizeStorageDirectory,
@@ -46,6 +47,18 @@ type ConfirmDialogRequest = {
   confirmText: string;
   cancelText: string;
   tone?: ConfirmDialogTone;
+};
+
+type AutoDownloadStatus = 'downloading' | 'saving' | 'completed' | 'failed' | 'skipped';
+
+type AutoDownloadTask = {
+  id: string;
+  name: string;
+  status: AutoDownloadStatus;
+  bytesDownloaded: number;
+  bytesTotal: number | null;
+  percentage: number | null;
+  message: string | null;
 };
 
 type BeforeInstallPromptEvent = Event & {
@@ -112,6 +125,8 @@ function App() {
   const [isScanningStorage, setIsScanningStorage] = useState(false);
   const [selectingStorageKind, setSelectingStorageKind] = useState<StorageDirectoryKind | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [downloadProgressOpen, setDownloadProgressOpen] = useState(false);
+  const [autoDownloadTasks, setAutoDownloadTasks] = useState<AutoDownloadTask[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogRequest | null>(null);
   const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [showPwaInstallPrompt, setShowPwaInstallPrompt] = useState(
@@ -126,6 +141,7 @@ function App() {
   const sourceFallbackPrompt = useRef<Promise<boolean> | null>(null);
   const confirmResolver = useRef<((confirmed: boolean) => void) | null>(null);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
+  const downloadProgressMenuRef = useRef<HTMLDivElement>(null);
 
   const auth = useMemo(
     () => ({
@@ -170,10 +186,50 @@ function App() {
     });
   }, []);
 
+  const updateAutoDownloadTask = useCallback(
+    (job: JobRecord, patch: Partial<Omit<AutoDownloadTask, 'id' | 'name'>>) => {
+      setAutoDownloadTasks((tasks) => {
+        const nextTask: AutoDownloadTask = {
+          id: job.id,
+          name: job.originalFileName,
+          status: 'downloading',
+          bytesDownloaded: 0,
+          bytesTotal: null,
+          percentage: null,
+          message: null,
+          ...patch
+        };
+        const existingTaskIndex = tasks.findIndex((task) => task.id === job.id);
+
+        if (existingTaskIndex === -1) {
+          return [nextTask, ...tasks];
+        }
+
+        return tasks.map((task, index) =>
+          index === existingTaskIndex ? { ...task, name: job.originalFileName, ...patch } : task
+        );
+      });
+    },
+    []
+  );
+
   const autoDownloadCompletedJob = useCallback(
     async (job: JobRecord) => {
+      updateAutoDownloadTask(job, { status: 'downloading' });
+
       try {
-        const download = await fetchJobDownload(job.id, auth);
+        const download = await fetchJobDownload(
+          job.id,
+          auth,
+          (downloadProgress: JobDownloadProgress) => {
+            updateAutoDownloadTask(job, {
+              status: 'downloading',
+              bytesDownloaded: downloadProgress.bytesDownloaded,
+              bytesTotal: downloadProgress.bytesTotal,
+              percentage: downloadProgress.percentage
+            });
+          }
+        );
         const targetKind = await getAutoDownloadTargetKind(
           sourceStorageDirectory,
           destinationStorageDirectory,
@@ -183,20 +239,48 @@ function App() {
         );
 
         if (!targetKind) {
+          updateAutoDownloadTask(job, {
+            status: 'skipped',
+            percentage: 100,
+            message: '已跳过自动保存'
+          });
           autoDownloadHandledJobIds.current.add(job.id);
           return;
         }
 
-        await saveBlobToStorageDirectory(targetKind, download.blob, download.filename);
+        updateAutoDownloadTask(job, {
+          status: 'saving',
+          bytesDownloaded: download.blob.size,
+          bytesTotal: download.blob.size,
+          percentage: 100
+        });
+        const savedFilename = await saveBlobToStorageDirectory(targetKind, download.blob, download.filename);
+        updateAutoDownloadTask(job, {
+          status: 'completed',
+          bytesDownloaded: download.blob.size,
+          bytesTotal: download.blob.size,
+          percentage: 100,
+          message: `已保存为 ${savedFilename}`
+        });
         autoDownloadHandledJobIds.current.add(job.id);
       } catch (err) {
+        updateAutoDownloadTask(job, {
+          status: 'failed',
+          message: err instanceof Error ? err.message : '自动下载失败'
+        });
         autoDownloadHandledJobIds.current.add(job.id);
         setError(err instanceof Error ? err.message : '自动下载失败');
       } finally {
         autoDownloadingJobIds.current.delete(job.id);
       }
     },
-    [auth, destinationStorageDirectory, requestConfirm, sourceStorageDirectory]
+    [
+      auth,
+      destinationStorageDirectory,
+      requestConfirm,
+      sourceStorageDirectory,
+      updateAutoDownloadTask
+    ]
   );
 
   useEffect(() => {
@@ -206,6 +290,7 @@ function App() {
     initializedJobSnapshot.current = false;
     autoDownloadHandledJobIds.current = new Set<string>();
     autoDownloadingJobIds.current = new Set<string>();
+    setAutoDownloadTasks([]);
 
     fetchHealth(auth)
       .then((result) => {
@@ -364,7 +449,7 @@ function App() {
   }, [apiBaseUrl]);
 
   useEffect(() => {
-    if (!settingsOpen) {
+    if (!settingsOpen && !downloadProgressOpen) {
       return;
     }
 
@@ -373,7 +458,12 @@ function App() {
         return;
       }
 
+      if (downloadProgressMenuRef.current?.contains(event.target as Node)) {
+        return;
+      }
+
       setSettingsOpen(false);
+      setDownloadProgressOpen(false);
     };
 
     document.addEventListener('pointerdown', handlePointerDown);
@@ -381,7 +471,7 @@ function App() {
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown);
     };
-  }, [settingsOpen]);
+  }, [downloadProgressOpen, settingsOpen]);
 
   useEffect(() => {
     if (!confirmDialog) {
@@ -484,6 +574,29 @@ function App() {
       setError(err instanceof Error ? err.message : '解锁失败');
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const handleStorageFileDelete = async (file: ScannedStorageFile) => {
+    const shouldDelete = await requestConfirm({
+      title: '删除未解锁原文件',
+      message: `确认删除 ${file.relativePath}？此操作会删除本地来源目录中的文件。`,
+      confirmText: '删除',
+      cancelText: '取消',
+      tone: 'danger'
+    });
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      await deleteScannedStorageFiles([file]);
+      await scanAuthorizedStorage();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除失败');
     }
   };
 
@@ -591,11 +704,57 @@ function App() {
             <span className={health ? 'status status-ok' : 'status status-offline'}>
               {health ? `Backend ${health.status}` : 'Backend offline'}
             </span>
+            <div className="download-progress-menu" ref={downloadProgressMenuRef}>
+              <button
+                aria-expanded={downloadProgressOpen}
+                aria-haspopup="true"
+                onClick={() => {
+                  setSettingsOpen(false);
+                  setDownloadProgressOpen((open) => !open);
+                }}
+                type="button"
+              >
+                下载进度
+              </button>
+              {downloadProgressOpen ? (
+                <div className="download-progress-panel">
+                  <div className="download-progress-heading">
+                    <strong>自动下载</strong>
+                    <span>{getActiveAutoDownloadCount(autoDownloadTasks)} 个进行中</span>
+                  </div>
+                  {autoDownloadTasks.length > 0 ? (
+                    <div className="download-task-list">
+                      {autoDownloadTasks.map((task) => (
+                        <div className="download-task" key={task.id}>
+                          <div>
+                            <strong>{task.name}</strong>
+                            <span>{getAutoDownloadStatusText(task)}</span>
+                          </div>
+                          <progress
+                            max="100"
+                            value={
+                              task.percentage ??
+                              (task.status === 'completed' || task.status === 'skipped' ? 100 : 0)
+                            }
+                          />
+                          <small>{getAutoDownloadDetailText(task)}</small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty">暂无自动下载任务</p>
+                  )}
+                </div>
+              ) : null}
+            </div>
             <div className="settings-menu" ref={settingsMenuRef}>
               <button
                 aria-expanded={settingsOpen}
                 aria-haspopup="true"
-                onClick={() => setSettingsOpen((open) => !open)}
+                onClick={() => {
+                  setDownloadProgressOpen(false);
+                  setSettingsOpen((open) => !open);
+                }}
                 type="button"
               >
                 设置
@@ -726,6 +885,14 @@ function App() {
                         type="button"
                       >
                         解锁
+                      </button>
+                      <button
+                        className="storage-file-delete"
+                        disabled={isUploading}
+                        onClick={() => void handleStorageFileDelete(file)}
+                        type="button"
+                      >
+                        删除
                       </button>
                     </div>
                   ))}
@@ -910,6 +1077,57 @@ function getStorageFileSummary(
   }
 
   return files.length > 0 ? `${files.length} 个文件` : '未发现匹配文件';
+}
+
+function getActiveAutoDownloadCount(tasks: AutoDownloadTask[]): number {
+  return tasks.filter((task) => task.status === 'downloading' || task.status === 'saving').length;
+}
+
+function getAutoDownloadStatusText(task: AutoDownloadTask): string {
+  switch (task.status) {
+    case 'downloading':
+      return '下载中';
+    case 'saving':
+      return '保存中';
+    case 'completed':
+      return '已完成';
+    case 'failed':
+      return '失败';
+    case 'skipped':
+      return '已跳过';
+  }
+}
+
+function getAutoDownloadDetailText(task: AutoDownloadTask): string {
+  if (task.message) {
+    return task.message;
+  }
+
+  if (task.status === 'downloading') {
+    const downloaded = formatBytes(task.bytesDownloaded);
+    return task.bytesTotal
+      ? `${downloaded} / ${formatBytes(task.bytesTotal)}`
+      : `${downloaded} 已下载`;
+  }
+
+  return getAutoDownloadStatusText(task);
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+
+  const units = ['KB', 'MB', 'GB'];
+  let nextValue = value / 1024;
+  let unitIndex = 0;
+
+  while (nextValue >= 1024 && unitIndex < units.length - 1) {
+    nextValue /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${nextValue.toFixed(nextValue >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
 
 async function getAutoDownloadTargetKind(

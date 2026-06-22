@@ -96,11 +96,13 @@ button {
   gap: 12px;
 }
 
-.settings-menu {
+.settings-menu,
+.download-progress-menu {
   position: relative;
 }
 
-.settings-panel {
+.settings-panel,
+.download-progress-panel {
   display: grid;
   gap: 12px;
   position: absolute;
@@ -113,6 +115,55 @@ button {
   background: #ffffff;
   box-shadow: 0 18px 42px rgba(15, 23, 42, 0.16);
   padding: 14px;
+}
+
+.download-progress-panel {
+  width: min(380px, calc(100vw - 40px));
+}
+
+.download-progress-heading,
+.download-task > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.download-progress-heading strong {
+  font-size: 14px;
+}
+
+.download-progress-heading span,
+.download-task span,
+.download-task small {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.download-task-list {
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.download-task {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.download-task strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .install-banner {
@@ -435,7 +486,7 @@ h2 {
 
 .storage-file-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 10px;
   border: 1px solid rgba(148, 163, 184, 0.28);
@@ -459,6 +510,10 @@ h2 {
   color: #0f766e;
   font-size: 12px;
   padding: 3px 8px;
+}
+
+.storage-file-row .storage-file-delete {
+  color: #b91c1c;
 }
 
 .upload-zone {
@@ -629,11 +684,14 @@ progress {
   }
 
   .settings-menu,
-  .settings-menu button {
+  .settings-menu button,
+  .download-progress-menu,
+  .download-progress-menu button {
     width: 100%;
   }
 
-  .settings-panel {
+  .settings-panel,
+  .download-progress-panel {
     left: 0;
     right: auto;
     width: 100%;

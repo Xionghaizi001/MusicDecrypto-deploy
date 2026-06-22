@@ -8,6 +8,12 @@ export type JobDownload = {
   filename: string;
 };
 
+export type JobDownloadProgress = {
+  bytesDownloaded: number;
+  bytesTotal: number | null;
+  percentage: number | null;
+};
+
 export async function fetchHealth(auth: ApiAuth): Promise<BackendHealth> {
   return request<BackendHealth>('/healthz', auth);
 }
@@ -21,7 +27,11 @@ export async function downloadJob(id: string, auth: ApiAuth): Promise<void> {
   await saveBlob(download.blob, download.filename);
 }
 
-export async function fetchJobDownload(id: string, auth: ApiAuth): Promise<JobDownload> {
+export async function fetchJobDownload(
+  id: string,
+  auth: ApiAuth,
+  onProgress?: (progress: JobDownloadProgress) => void
+): Promise<JobDownload> {
   const response = await fetch(buildApiUrl(`/api/jobs/${id}/download`, auth), {
     headers: authHeaders(auth)
   });
@@ -30,13 +40,73 @@ export async function fetchJobDownload(id: string, auth: ApiAuth): Promise<JobDo
     throw new Error(`Download failed: ${response.status}`);
   }
 
-  const blob = await response.blob();
+  const blob = await readDownloadBlob(response, onProgress);
   const filename = normalizeDownloadedFilename(getDownloadFilename(response) ?? `${id}.bin`, id);
 
   return {
     blob,
     filename
   };
+}
+
+async function readDownloadBlob(
+  response: Response,
+  onProgress?: (progress: JobDownloadProgress) => void
+): Promise<Blob> {
+  const bytesTotal = parseContentLength(response.headers.get('content-length'));
+
+  if (!response.body) {
+    const blob = await response.blob();
+    onProgress?.({
+      bytesDownloaded: blob.size,
+      bytesTotal: blob.size,
+      percentage: 100
+    });
+    return blob;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: BlobPart[] = [];
+  let bytesDownloaded = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    const chunk = new Uint8Array(value.byteLength);
+    chunk.set(value);
+    chunks.push(chunk);
+    bytesDownloaded += value.byteLength;
+    onProgress?.({
+      bytesDownloaded,
+      bytesTotal,
+      percentage: bytesTotal ? (bytesDownloaded / bytesTotal) * 100 : null
+    });
+  }
+
+  if (bytesTotal === null) {
+    onProgress?.({
+      bytesDownloaded,
+      bytesTotal,
+      percentage: 100
+    });
+  }
+
+  return new Blob(chunks, {
+    type: response.headers.get('content-type') ?? 'application/octet-stream'
+  });
+}
+
+function parseContentLength(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 export async function deleteJob(id: string, auth: ApiAuth): Promise<JobDeleteResult> {
