@@ -1,0 +1,15 @@
+{
+  "name": "musicdecrypto-deploy",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "frontend:dev": "pnpm --dir packages/frontend dev",
+    "frontend:build": "pnpm --dir packages/frontend build",
+    "frontend:preview": "pnpm --dir packages/frontend preview",
+    "backend:dev": "dotnet run --project packages/backend/MusicDecrypto.Backend.csproj",
+    "backend:build": "dotnet build packages/backend/MusicDecrypto.Backend.csproj"
+  }
+}

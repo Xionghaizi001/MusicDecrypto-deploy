@@ -1,0 +1,16 @@
+node_modules/
+dist/
+bin/
+obj/
+data/
+publish/
+*.tsbuildinfo
+*.user
+*.suo
+.vs/
+.pnpm-data/
+.pnpm-home/
+.codex/
+.agents/
+.claude/
+.gemini/
