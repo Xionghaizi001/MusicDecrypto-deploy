@@ -50,6 +50,7 @@ PROVIDED_SSL_CERTIFICATE="${SSL_CERTIFICATE+x}"
 PROVIDED_SSL_CERTIFICATE_KEY="${SSL_CERTIFICATE_KEY+x}"
 PROVIDED_NGINX_SITE_FILE="${NGINX_SITE_FILE+x}"
 PROVIDED_NGINX_USER="${NGINX_USER+x}"
+PROVIDED_WEB_ENV_FILE="${WEB_ENV_FILE+x}"
 PROVIDED_FRONTEND_BUILD="${FRONTEND_BUILD+x}"
 PROVIDED_PNPM_BIN="${PNPM_BIN+x}"
 PROVIDED_FORCE_OVERWRITE="${FORCE_OVERWRITE+x}"
@@ -77,6 +78,7 @@ SSL_CERTIFICATE="${SSL_CERTIFICATE:-}"
 SSL_CERTIFICATE_KEY="${SSL_CERTIFICATE_KEY:-}"
 NGINX_SITE_FILE="${NGINX_SITE_FILE:-/etc/nginx/sites-available/musicdecrypto.conf}"
 NGINX_USER="${NGINX_USER:-}"
+WEB_ENV_FILE="${WEB_ENV_FILE:-/etc/musicdecrypto-web.env}"
 FRONTEND_BUILD="${FRONTEND_BUILD:-1}"
 PNPM_BIN="${PNPM_BIN:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-true}"
@@ -103,6 +105,7 @@ Setup commands:
   publish-frontend Build and copy the frontend into FRONTEND_DIR
   write-web-config Generate the Nginx site file without reloading Nginx
   install-web      Publish frontend, write Nginx config, and reload Nginx
+  web-deploy       Alias of install-web
   install-all      Install backend service and web frontend
 
 Runtime commands:
@@ -115,6 +118,7 @@ Runtime commands:
 
 Maintenance commands:
   configure        Update runtime settings and restart the service
+  update-web-deploy Rebuild frontend, reuse saved web config, and reload Nginx
   reinstall-deps   Re-run dependency installation
   uninstall        Stop and remove the systemd service; keeps data by default
   show-config      Print resolved configuration
@@ -130,11 +134,12 @@ Common settings:
   BIND_HOST=$BIND_HOST
   PORT=$PORT
   API_KEY=<secret>
-  SERVER_NAME=<required-for-install-web>
+  SERVER_NAME=<required-for-web-deploy>
   SSL_CERTIFICATE=/path/to/fullchain.pem optional
   SSL_CERTIFICATE_KEY=/path/to/privkey.pem optional
   NGINX_SITE_FILE=$NGINX_SITE_FILE
   NGINX_USER=$NGINX_USER
+  WEB_ENV_FILE=$WEB_ENV_FILE
   FRONTEND_BUILD=$FRONTEND_BUILD
   PNPM_BIN=/path/to/pnpm optional
   AUTO_DELETE_AFTER_DAYS=$AUTO_DELETE_AFTER_DAYS
@@ -148,7 +153,8 @@ Examples:
   sudo API_KEY='replace-with-secret' PORT=5080 $0 install-service
   sudo PORT=5080 $0 install-service
   sudo PORT=5081 ALLOWED_ORIGINS=https://app.example.com $0 configure
-  sudo PORT=5081 SERVER_NAME=your-domain.example $0 install-web
+  sudo PORT=5081 SERVER_NAME=your-domain.example $0 web-deploy
+  sudo $0 update-web-deploy
   sudo API_KEY='replace-with-secret' PORT=5081 SERVER_NAME=your-domain.example $0 install-all
   $0 api-check
   sudo REMOVE_DATA=1 $0 uninstall
@@ -360,6 +366,10 @@ configured_allowed_origins() {
   ' "$file"
 }
 
+web_env_value() {
+  env_value "$1" "$WEB_ENV_FILE"
+}
+
 was_provided() {
   local name="$1"
   local flag="PROVIDED_$name"
@@ -367,7 +377,7 @@ was_provided() {
 }
 
 resolve_runtime_config() {
-  if [ ! -f "$ENV_FILE" ]; then
+  if [ ! -f "$ENV_FILE" ] && [ ! -f "$WEB_ENV_FILE" ]; then
     return
   fi
 
@@ -382,30 +392,35 @@ resolve_runtime_config() {
   fi
 
   if ! was_provided BIND_HOST; then
-    BIND_HOST="$(env_value MUSICDECRYPTO_MANAGE_BIND_HOST || true)"
+    BIND_HOST="$(web_env_value MUSICDECRYPTO_MANAGE_BIND_HOST || true)"
+    BIND_HOST="${BIND_HOST:-$(env_value MUSICDECRYPTO_MANAGE_BIND_HOST || true)}"
     BIND_HOST="${BIND_HOST:-$(configured_bind_host || true)}"
     BIND_HOST="${BIND_HOST:-127.0.0.1}"
   fi
 
   if ! was_provided PORT; then
-    PORT="$(env_value MUSICDECRYPTO_MANAGE_PORT || true)"
+    PORT="$(web_env_value MUSICDECRYPTO_MANAGE_PORT || true)"
+    PORT="${PORT:-$(env_value MUSICDECRYPTO_MANAGE_PORT || true)}"
     PORT="${PORT:-$(configured_port || true)}"
     PORT="${PORT:-5080}"
   fi
 
   if ! was_provided APP_DIR; then
-    APP_DIR="$(env_value MUSICDECRYPTO_MANAGE_APP_DIR || true)"
+    APP_DIR="$(web_env_value MUSICDECRYPTO_MANAGE_APP_DIR || true)"
+    APP_DIR="${APP_DIR:-$(env_value MUSICDECRYPTO_MANAGE_APP_DIR || true)}"
     APP_DIR="${APP_DIR:-$(env_value MusicDecrypto__UpdateApplyRoot || true)}"
     APP_DIR="${APP_DIR:-$PROJECT_DIR}"
   fi
 
   if ! was_provided PUBLISH_DIR; then
-    PUBLISH_DIR="$(env_value MUSICDECRYPTO_MANAGE_PUBLISH_DIR || true)"
+    PUBLISH_DIR="$(web_env_value MUSICDECRYPTO_MANAGE_PUBLISH_DIR || true)"
+    PUBLISH_DIR="${PUBLISH_DIR:-$(env_value MUSICDECRYPTO_MANAGE_PUBLISH_DIR || true)}"
     PUBLISH_DIR="${PUBLISH_DIR:-$APP_DIR/publish}"
   fi
 
   if ! was_provided DATA_DIR; then
-    DATA_DIR="$(env_value MusicDecrypto__StorageRoot || true)"
+    DATA_DIR="$(web_env_value MUSICDECRYPTO_MANAGE_DATA_DIR || true)"
+    DATA_DIR="${DATA_DIR:-$(env_value MusicDecrypto__StorageRoot || true)}"
     DATA_DIR="${DATA_DIR:-/var/lib/musicdecrypto}"
   fi
 
@@ -425,12 +440,14 @@ resolve_runtime_config() {
   fi
 
   if ! was_provided FRONTEND_SOURCE_DIR; then
-    FRONTEND_SOURCE_DIR="$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR || true)"
+    FRONTEND_SOURCE_DIR="$(web_env_value MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR || true)"
+    FRONTEND_SOURCE_DIR="${FRONTEND_SOURCE_DIR:-$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR || true)}"
     FRONTEND_SOURCE_DIR="${FRONTEND_SOURCE_DIR:-$(cd "$PROJECT_DIR/../frontend" && pwd)}"
   fi
 
   if ! was_provided FRONTEND_DIR; then
-    FRONTEND_DIR="$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_DIR || true)"
+    FRONTEND_DIR="$(web_env_value MUSICDECRYPTO_MANAGE_FRONTEND_DIR || true)"
+    FRONTEND_DIR="${FRONTEND_DIR:-$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_DIR || true)}"
     FRONTEND_DIR="${FRONTEND_DIR:-$APP_DIR/frontend-dist}"
   fi
 
@@ -468,34 +485,41 @@ resolve_runtime_config() {
   fi
 
   if ! was_provided SERVER_NAME; then
-    SERVER_NAME="$(env_value MUSICDECRYPTO_MANAGE_SERVER_NAME || true)"
+    SERVER_NAME="$(web_env_value MUSICDECRYPTO_MANAGE_SERVER_NAME || true)"
+    SERVER_NAME="${SERVER_NAME:-$(env_value MUSICDECRYPTO_MANAGE_SERVER_NAME || true)}"
   fi
 
   if ! was_provided SSL_CERTIFICATE; then
-    SSL_CERTIFICATE="$(env_value MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE || true)"
+    SSL_CERTIFICATE="$(web_env_value MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE || true)"
+    SSL_CERTIFICATE="${SSL_CERTIFICATE:-$(env_value MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE || true)}"
   fi
 
   if ! was_provided SSL_CERTIFICATE_KEY; then
-    SSL_CERTIFICATE_KEY="$(env_value MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE_KEY || true)"
+    SSL_CERTIFICATE_KEY="$(web_env_value MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE_KEY || true)"
+    SSL_CERTIFICATE_KEY="${SSL_CERTIFICATE_KEY:-$(env_value MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE_KEY || true)}"
   fi
 
   if ! was_provided NGINX_SITE_FILE; then
-    NGINX_SITE_FILE="$(env_value MUSICDECRYPTO_MANAGE_NGINX_SITE_FILE || true)"
+    NGINX_SITE_FILE="$(web_env_value MUSICDECRYPTO_MANAGE_NGINX_SITE_FILE || true)"
+    NGINX_SITE_FILE="${NGINX_SITE_FILE:-$(env_value MUSICDECRYPTO_MANAGE_NGINX_SITE_FILE || true)}"
     NGINX_SITE_FILE="${NGINX_SITE_FILE:-/etc/nginx/sites-available/musicdecrypto.conf}"
   fi
 
   if ! was_provided NGINX_USER; then
-    NGINX_USER="$(env_value MUSICDECRYPTO_MANAGE_NGINX_USER || true)"
+    NGINX_USER="$(web_env_value MUSICDECRYPTO_MANAGE_NGINX_USER || true)"
+    NGINX_USER="${NGINX_USER:-$(env_value MUSICDECRYPTO_MANAGE_NGINX_USER || true)}"
     NGINX_USER="${NGINX_USER:-$(default_nginx_user || true)}"
   fi
 
   if ! was_provided FRONTEND_BUILD; then
-    FRONTEND_BUILD="$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_BUILD || true)"
+    FRONTEND_BUILD="$(web_env_value MUSICDECRYPTO_MANAGE_FRONTEND_BUILD || true)"
+    FRONTEND_BUILD="${FRONTEND_BUILD:-$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_BUILD || true)}"
     FRONTEND_BUILD="${FRONTEND_BUILD:-1}"
   fi
 
   if ! was_provided PNPM_BIN; then
-    PNPM_BIN="$(env_value MUSICDECRYPTO_MANAGE_PNPM_BIN || true)"
+    PNPM_BIN="$(web_env_value MUSICDECRYPTO_MANAGE_PNPM_BIN || true)"
+    PNPM_BIN="${PNPM_BIN:-$(env_value MUSICDECRYPTO_MANAGE_PNPM_BIN || true)}"
   fi
 }
 
@@ -524,6 +548,7 @@ SSL_CERTIFICATE=$SSL_CERTIFICATE
 SSL_CERTIFICATE_KEY=$SSL_CERTIFICATE_KEY
 NGINX_SITE_FILE=$NGINX_SITE_FILE
 NGINX_USER=$NGINX_USER
+WEB_ENV_FILE=$WEB_ENV_FILE
 FRONTEND_BUILD=$FRONTEND_BUILD
 PNPM_BIN=$PNPM_BIN
 FORCE_OVERWRITE=$FORCE_OVERWRITE
@@ -691,14 +716,17 @@ cmd_publish_frontend() {
   ensure_nginx_can_read_frontend
 }
 
-write_nginx_file() {
-  resolve_runtime_config
-
-  [ -n "$SERVER_NAME" ] || fail "SERVER_NAME is required for install-web, for example: SERVER_NAME=dec.example.com"
+validate_web_config() {
+  [ -n "$SERVER_NAME" ] || fail "SERVER_NAME is required for web deploy, for example: SERVER_NAME=dec.example.com"
   if { [ -n "$SSL_CERTIFICATE" ] && [ -z "$SSL_CERTIFICATE_KEY" ]; } ||
     { [ -z "$SSL_CERTIFICATE" ] && [ -n "$SSL_CERTIFICATE_KEY" ]; }; then
     fail "provide both SSL_CERTIFICATE and SSL_CERTIFICATE_KEY, or leave both empty"
   fi
+}
+
+write_nginx_file() {
+  resolve_runtime_config
+  validate_web_config
 
   log "Writing $NGINX_SITE_FILE"
   mkdir -p "$(dirname "$NGINX_SITE_FILE")"
@@ -880,6 +908,31 @@ NGINX
   fi
 }
 
+write_web_env_file() {
+  resolve_runtime_config
+  validate_web_config
+
+  log "Writing $WEB_ENV_FILE"
+  mkdir -p "$(dirname "$WEB_ENV_FILE")"
+  cat >"$WEB_ENV_FILE" <<ENV
+MUSICDECRYPTO_MANAGE_BIND_HOST=$BIND_HOST
+MUSICDECRYPTO_MANAGE_PORT=$PORT
+MUSICDECRYPTO_MANAGE_APP_DIR=$APP_DIR
+MUSICDECRYPTO_MANAGE_PUBLISH_DIR=$PUBLISH_DIR
+MUSICDECRYPTO_MANAGE_DATA_DIR=$DATA_DIR
+MUSICDECRYPTO_MANAGE_FRONTEND_SOURCE_DIR=$FRONTEND_SOURCE_DIR
+MUSICDECRYPTO_MANAGE_FRONTEND_DIR=$FRONTEND_DIR
+MUSICDECRYPTO_MANAGE_SERVER_NAME=$SERVER_NAME
+MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE=$SSL_CERTIFICATE
+MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE_KEY=$SSL_CERTIFICATE_KEY
+MUSICDECRYPTO_MANAGE_NGINX_SITE_FILE=$NGINX_SITE_FILE
+MUSICDECRYPTO_MANAGE_NGINX_USER=$NGINX_USER
+MUSICDECRYPTO_MANAGE_FRONTEND_BUILD=$FRONTEND_BUILD
+MUSICDECRYPTO_MANAGE_PNPM_BIN=$PNPM_BIN
+ENV
+  chmod 600 "$WEB_ENV_FILE"
+}
+
 cmd_write_web_config() {
   write_nginx_file
 }
@@ -887,6 +940,24 @@ cmd_write_web_config() {
 cmd_install_web() {
   require_root
 
+  write_web_env_file
+  cmd_publish_frontend
+  write_nginx_file
+
+  if have nginx; then
+    nginx -t
+    systemctl reload nginx
+  else
+    log "nginx command not found; install/reload your web server manually."
+  fi
+}
+
+cmd_update_web_deploy() {
+  require_root
+
+  [ -f "$WEB_ENV_FILE" ] || fail "web environment file not found: $WEB_ENV_FILE; run install-web once with SERVER_NAME and other required settings"
+
+  write_web_env_file
   cmd_publish_frontend
   write_nginx_file
 
@@ -1107,7 +1178,7 @@ case "$command" in
   install-service) cmd_install_service ;;
   publish-frontend) cmd_publish_frontend ;;
   write-web-config) cmd_write_web_config ;;
-  install-web) cmd_install_web ;;
+  install-web|web-deploy) cmd_install_web ;;
   install-all) cmd_install_all ;;
   configure) cmd_configure ;;
   start) cmd_start ;;
@@ -1116,6 +1187,7 @@ case "$command" in
   status) cmd_status ;;
   api-check) cmd_api_check ;;
   logs) cmd_logs ;;
+  update-web-deploy) cmd_update_web_deploy ;;
   reinstall-deps) cmd_install_deps ;;
   uninstall) cmd_uninstall ;;
   show-config) cmd_show_config ;;

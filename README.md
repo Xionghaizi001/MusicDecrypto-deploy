@@ -189,7 +189,7 @@ To deploy the frontend alongside the backend app directory and generate an Nginx
 sudo \
   PORT=5081 \
   SERVER_NAME=dec.example.com \
-  scripts/manage.sh install-web
+  scripts/manage.sh web-deploy
 ```
 
 The default frontend output is:
@@ -204,7 +204,7 @@ With the default traditional install path, that is:
 /opt/musicdecrypto/backend/frontend-dist
 ```
 
-`install-web` builds `../frontend`, copies `dist/` into `FRONTEND_DIR`, writes `NGINX_SITE_FILE`, tests Nginx, and reloads it. `SERVER_NAME` is required at runtime. If your certificate is not in the Let's Encrypt default location, pass explicit paths:
+`web-deploy` is an alias of `install-web`. It builds `../frontend`, copies `dist/` into `FRONTEND_DIR`, writes `NGINX_SITE_FILE`, tests Nginx, reloads it, and saves the resolved web deployment settings in `/etc/musicdecrypto-web.env`. `SERVER_NAME` is required only for the first web deployment, or when changing it later.
 If `SSL_CERTIFICATE` and `SSL_CERTIFICATE_KEY` are omitted, the generated site listens on HTTP only. This is useful when HTTPS is managed by 1Panel or another outer reverse-proxy/certificate layer.
 
 If you want this generated Nginx site to terminate HTTPS itself, pass both certificate paths:
@@ -215,7 +215,23 @@ sudo \
   SERVER_NAME=dec.example.com \
   SSL_CERTIFICATE=/path/to/fullchain.pem \
   SSL_CERTIFICATE_KEY=/path/to/privkey.pem \
-  scripts/manage.sh install-web
+  scripts/manage.sh web-deploy
+```
+
+After the first successful web deployment, update the frontend and regenerate the Nginx site from the saved settings with:
+
+```bash
+sudo scripts/manage.sh update-web-deploy
+```
+
+To replace part of the saved web deployment config, pass only the values that changed:
+
+```bash
+sudo \
+  SERVER_NAME=dec.example.com \
+  SSL_CERTIFICATE=/path/to/fullchain.pem \
+  SSL_CERTIFICATE_KEY=/path/to/privkey.pem \
+  scripts/manage.sh update-web-deploy
 ```
 
 To install backend service and frontend site together:
