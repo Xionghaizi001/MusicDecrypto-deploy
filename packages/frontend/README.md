@@ -2,6 +2,9 @@
 
 React + TypeScript + Vite frontend shell for the MusicDecrypto backend.
 
+## Preview
+![preview](../../assets/preview.png)
+
 ## Scripts
 
 ```bash
