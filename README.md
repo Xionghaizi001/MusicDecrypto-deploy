@@ -215,6 +215,17 @@ sudo \
   scripts/manage.sh web-deploy
 ```
 
+If Node.js or pnpm is installed in a non-standard location, pass explicit binary paths. `NODE_BIN` adds its directory to `PATH` for the frontend build user before running pnpm:
+
+```bash
+sudo \
+  FRONTEND_BUILD_USER=deploy \
+  NODE_BIN=/home/deploy/.nvm/versions/node/v22.0.0/bin/node \
+  PNPM_BIN=/home/deploy/.local/share/pnpm/pnpm \
+  SERVER_NAME=dec.example.com \
+  scripts/manage.sh web-deploy
+```
+
 If `SSL_CERTIFICATE` and `SSL_CERTIFICATE_KEY` are omitted, the generated site listens on HTTP only. This is useful when HTTPS is managed by 1Panel or another outer reverse-proxy/certificate layer.
 
 If you want this generated Nginx site to terminate HTTPS itself, pass both certificate paths:

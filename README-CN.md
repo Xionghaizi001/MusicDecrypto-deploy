@@ -215,6 +215,17 @@ sudo \
   scripts/manage.sh web-deploy
 ```
 
+如果 Node.js 或 pnpm 安装在非标准位置，可以显式传入二进制路径。`NODE_BIN` 会在执行 pnpm 前，把 node 所在目录加入前端构建用户的 `PATH`：
+
+```bash
+sudo \
+  FRONTEND_BUILD_USER=deploy \
+  NODE_BIN=/home/deploy/.nvm/versions/node/v22.0.0/bin/node \
+  PNPM_BIN=/home/deploy/.local/share/pnpm/pnpm \
+  SERVER_NAME=dec.example.com \
+  scripts/manage.sh web-deploy
+```
+
 如果没有提供 `SSL_CERTIFICATE` 和 `SSL_CERTIFICATE_KEY`，生成的站点只监听 HTTP。这适合 HTTPS 已由 1Panel 或外层反向代理处理的场景。
 
 如果希望这个 Nginx 站点自己终止 HTTPS，请同时传入两个证书路径：
