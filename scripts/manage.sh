@@ -52,6 +52,7 @@ PROVIDED_NGINX_SITE_FILE="${NGINX_SITE_FILE+x}"
 PROVIDED_NGINX_USER="${NGINX_USER+x}"
 PROVIDED_WEB_ENV_FILE="${WEB_ENV_FILE+x}"
 PROVIDED_FRONTEND_BUILD="${FRONTEND_BUILD+x}"
+PROVIDED_FRONTEND_BUILD_USER="${FRONTEND_BUILD_USER+x}"
 PROVIDED_PNPM_BIN="${PNPM_BIN+x}"
 PROVIDED_FORCE_OVERWRITE="${FORCE_OVERWRITE+x}"
 PROVIDED_EXTENSIVE_DETECTION="${EXTENSIVE_DETECTION+x}"
@@ -80,6 +81,7 @@ NGINX_SITE_FILE="${NGINX_SITE_FILE:-/etc/nginx/sites-available/musicdecrypto.con
 NGINX_USER="${NGINX_USER:-}"
 WEB_ENV_FILE="${WEB_ENV_FILE:-/etc/musicdecrypto-web.env}"
 FRONTEND_BUILD="${FRONTEND_BUILD:-1}"
+FRONTEND_BUILD_USER="${FRONTEND_BUILD_USER:-}"
 PNPM_BIN="${PNPM_BIN:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-true}"
 EXTENSIVE_DETECTION="${EXTENSIVE_DETECTION:-false}"
@@ -141,6 +143,7 @@ Common settings:
   NGINX_USER=$NGINX_USER
   WEB_ENV_FILE=$WEB_ENV_FILE
   FRONTEND_BUILD=$FRONTEND_BUILD
+  FRONTEND_BUILD_USER=<auto>
   PNPM_BIN=/path/to/pnpm optional
   AUTO_DELETE_AFTER_DAYS=$AUTO_DELETE_AFTER_DAYS
   ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
@@ -200,6 +203,58 @@ default_nginx_user() {
   true
 }
 
+default_frontend_build_user() {
+  local owner
+
+  for path in "$FRONTEND_SOURCE_DIR" "$PROJECT_DIR"; do
+    owner="$(stat -c '%U' "$path" 2>/dev/null || true)"
+    if [ -n "$owner" ] && [ "$owner" != "root" ] && id "$owner" >/dev/null 2>&1; then
+      printf '%s\n' "$owner"
+      return
+    fi
+  done
+
+  if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+    printf '%s\n' "$SUDO_USER"
+    return
+  fi
+
+  true
+}
+
+shell_quote() {
+  printf '%q' "$1"
+}
+
+user_home_dir() {
+  local user="$1"
+  getent passwd "$user" 2>/dev/null | awk -F: '{print $6; exit}'
+}
+
+run_frontend_build_shell() {
+  local command="$1"
+
+  if [ "${EUID:-$(id -u)}" -eq 0 ] && [ -n "$FRONTEND_BUILD_USER" ] && [ "$FRONTEND_BUILD_USER" != "root" ]; then
+    local home_dir
+    home_dir="$(user_home_dir "$FRONTEND_BUILD_USER")"
+    [ -n "$home_dir" ] || fail "home directory not found for FRONTEND_BUILD_USER=$FRONTEND_BUILD_USER"
+
+    if have runuser; then
+      HOME="$home_dir" runuser -u "$FRONTEND_BUILD_USER" -- bash -lc "$command"
+      return
+    fi
+
+    if have sudo; then
+      HOME="$home_dir" sudo -H -u "$FRONTEND_BUILD_USER" bash -lc "$command"
+      return
+    fi
+
+    fail "runuser or sudo is required to build frontend as FRONTEND_BUILD_USER=$FRONTEND_BUILD_USER"
+  fi
+
+  bash -lc "$command"
+}
+
 dotnet_cmd() {
   if [ -n "${DOTNET_BIN:-}" ]; then
     printf '%s\n' "$DOTNET_BIN"
@@ -217,6 +272,57 @@ dotnet_cmd() {
   fi
 
   true
+}
+
+pnpm_cmd_for_frontend_user() {
+  if [ -n "$PNPM_BIN" ]; then
+    printf '%s\n' "$PNPM_BIN"
+    return
+  fi
+
+  if [ "${EUID:-$(id -u)}" -eq 0 ] && [ -n "$FRONTEND_BUILD_USER" ] && [ "$FRONTEND_BUILD_USER" != "root" ]; then
+    run_frontend_build_shell '
+      if command -v pnpm >/dev/null 2>&1; then
+        command -v pnpm
+        exit
+      fi
+
+      if command -v npm >/dev/null 2>&1; then
+        npm_prefix="$(npm config get prefix 2>/dev/null || true)"
+        if [ -x "$npm_prefix/bin/pnpm" ]; then
+          printf "%s\n" "$npm_prefix/bin/pnpm"
+          exit
+        fi
+      fi
+
+      for candidate in /usr/local/bin/pnpm /usr/bin/pnpm "$HOME/.local/share/pnpm/pnpm"; do
+        if [ -x "$candidate" ]; then
+          printf "%s\n" "$candidate"
+          exit
+        fi
+      done
+
+      if command -v corepack >/dev/null 2>&1; then
+        printf "corepack pnpm\n"
+      fi
+    '
+    return
+  fi
+
+  pnpm_cmd
+}
+
+run_frontend_pnpm() {
+  local pnpm_path="$1"
+  shift
+
+  local command="$pnpm_path"
+  local arg
+  for arg in "$@"; do
+    command+=" $(shell_quote "$arg")"
+  done
+
+  run_frontend_build_shell "$command"
 }
 
 pnpm_cmd() {
@@ -517,6 +623,12 @@ resolve_runtime_config() {
     FRONTEND_BUILD="${FRONTEND_BUILD:-1}"
   fi
 
+  if ! was_provided FRONTEND_BUILD_USER; then
+    FRONTEND_BUILD_USER="$(web_env_value MUSICDECRYPTO_MANAGE_FRONTEND_BUILD_USER || true)"
+    FRONTEND_BUILD_USER="${FRONTEND_BUILD_USER:-$(env_value MUSICDECRYPTO_MANAGE_FRONTEND_BUILD_USER || true)}"
+    FRONTEND_BUILD_USER="${FRONTEND_BUILD_USER:-$(default_frontend_build_user || true)}"
+  fi
+
   if ! was_provided PNPM_BIN; then
     PNPM_BIN="$(web_env_value MUSICDECRYPTO_MANAGE_PNPM_BIN || true)"
     PNPM_BIN="${PNPM_BIN:-$(env_value MUSICDECRYPTO_MANAGE_PNPM_BIN || true)}"
@@ -550,6 +662,7 @@ NGINX_SITE_FILE=$NGINX_SITE_FILE
 NGINX_USER=$NGINX_USER
 WEB_ENV_FILE=$WEB_ENV_FILE
 FRONTEND_BUILD=$FRONTEND_BUILD
+FRONTEND_BUILD_USER=$FRONTEND_BUILD_USER
 PNPM_BIN=$PNPM_BIN
 FORCE_OVERWRITE=$FORCE_OVERWRITE
 EXTENSIVE_DETECTION=$EXTENSIVE_DETECTION
@@ -686,6 +799,41 @@ ensure_nginx_can_read_frontend() {
   done
 }
 
+ensure_frontend_build_user_can_write_artifacts() {
+  if [ "${EUID:-$(id -u)}" -ne 0 ] || [ -z "$FRONTEND_BUILD_USER" ] || [ "$FRONTEND_BUILD_USER" = "root" ]; then
+    return
+  fi
+
+  local group
+  group="$(id -gn "$FRONTEND_BUILD_USER" 2>/dev/null || true)"
+  [ -n "$group" ] || fail "group not found for FRONTEND_BUILD_USER=$FRONTEND_BUILD_USER"
+
+  local path
+  for path in "$FRONTEND_SOURCE_DIR/node_modules" "$FRONTEND_SOURCE_DIR/dist"; do
+    if [ -e "$path" ]; then
+      log "Granting frontend build user '$FRONTEND_BUILD_USER' access to $path"
+      chown -R "$FRONTEND_BUILD_USER:$group" "$path"
+    fi
+  done
+}
+
+require_frontend_build_user_when_root() {
+  if [ "${EUID:-$(id -u)}" -eq 0 ] && [ -z "$FRONTEND_BUILD_USER" ]; then
+    fail "could not determine a normal frontend build user. Set FRONTEND_BUILD_USER=your-user, or use FRONTEND_BUILD=0 after preparing $FRONTEND_SOURCE_DIR/dist."
+  fi
+}
+
+ensure_frontend_build_user_can_write_source() {
+  if [ "$FRONTEND_BUILD" = "0" ]; then
+    return
+  fi
+
+  local quoted_source
+  quoted_source="$(shell_quote "$FRONTEND_SOURCE_DIR")"
+  run_frontend_build_shell "test -w $quoted_source" ||
+    fail "FRONTEND_BUILD_USER=$FRONTEND_BUILD_USER cannot write to frontend source directory: $FRONTEND_SOURCE_DIR"
+}
+
 cmd_publish_frontend() {
   resolve_runtime_config
 
@@ -696,14 +844,26 @@ cmd_publish_frontend() {
 
   if [ "$FRONTEND_BUILD" != "0" ]; then
     local pnpm_path
-    pnpm_path="$(pnpm_cmd)"
-    [ -n "$pnpm_path" ] || fail "pnpm is required to build the frontend. If pnpm is installed for another user, pass PNPM_BIN=/path/to/pnpm, run with sudo -E, or run with FRONTEND_BUILD=0 after preparing $source_dist."
+    require_frontend_build_user_when_root
+    ensure_frontend_build_user_can_write_artifacts
+    ensure_frontend_build_user_can_write_source
 
-    log "Installing frontend dependencies"
-    $pnpm_path -C "$FRONTEND_SOURCE_DIR" install --frozen-lockfile
+    pnpm_path="$(pnpm_cmd_for_frontend_user)"
+    [ -n "$pnpm_path" ] || fail "pnpm is required to build the frontend. Install pnpm for FRONTEND_BUILD_USER=$FRONTEND_BUILD_USER, pass PNPM_BIN=/path/to/pnpm, or run with FRONTEND_BUILD=0 after preparing $source_dist."
 
-    log "Building frontend"
-    $pnpm_path -C "$FRONTEND_SOURCE_DIR" build
+    if [ "${EUID:-$(id -u)}" -eq 0 ] && [ -n "$FRONTEND_BUILD_USER" ] && [ "$FRONTEND_BUILD_USER" != "root" ]; then
+      log "Installing frontend dependencies as $FRONTEND_BUILD_USER"
+    else
+      log "Installing frontend dependencies"
+    fi
+    run_frontend_pnpm "$pnpm_path" -C "$FRONTEND_SOURCE_DIR" install --frozen-lockfile
+
+    if [ "${EUID:-$(id -u)}" -eq 0 ] && [ -n "$FRONTEND_BUILD_USER" ] && [ "$FRONTEND_BUILD_USER" != "root" ]; then
+      log "Building frontend as $FRONTEND_BUILD_USER"
+    else
+      log "Building frontend"
+    fi
+    run_frontend_pnpm "$pnpm_path" -C "$FRONTEND_SOURCE_DIR" build
   fi
 
   [ -f "$source_dist/index.html" ] || fail "frontend build output not found: $source_dist/index.html"
@@ -928,6 +1088,7 @@ MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE_KEY=$SSL_CERTIFICATE_KEY
 MUSICDECRYPTO_MANAGE_NGINX_SITE_FILE=$NGINX_SITE_FILE
 MUSICDECRYPTO_MANAGE_NGINX_USER=$NGINX_USER
 MUSICDECRYPTO_MANAGE_FRONTEND_BUILD=$FRONTEND_BUILD
+MUSICDECRYPTO_MANAGE_FRONTEND_BUILD_USER=$FRONTEND_BUILD_USER
 MUSICDECRYPTO_MANAGE_PNPM_BIN=$PNPM_BIN
 ENV
   chmod 600 "$WEB_ENV_FILE"
@@ -1021,6 +1182,7 @@ MUSICDECRYPTO_MANAGE_SSL_CERTIFICATE_KEY=$SSL_CERTIFICATE_KEY
 MUSICDECRYPTO_MANAGE_NGINX_SITE_FILE=$NGINX_SITE_FILE
 MUSICDECRYPTO_MANAGE_NGINX_USER=$NGINX_USER
 MUSICDECRYPTO_MANAGE_FRONTEND_BUILD=$FRONTEND_BUILD
+MUSICDECRYPTO_MANAGE_FRONTEND_BUILD_USER=$FRONTEND_BUILD_USER
 MUSICDECRYPTO_MANAGE_PNPM_BIN=$PNPM_BIN
 Kestrel__Endpoints__Http__Url=http://$BIND_HOST:$PORT
 MusicDecrypto__StorageRoot=$DATA_DIR

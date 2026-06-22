@@ -205,6 +205,16 @@ With the default traditional install path, that is:
 ```
 
 `web-deploy` is an alias of `install-web`. It builds `../frontend`, copies `dist/` into `FRONTEND_DIR`, writes `NGINX_SITE_FILE`, tests Nginx, reloads it, and saves the resolved web deployment settings in `/etc/musicdecrypto-web.env`. `SERVER_NAME` is required only for the first web deployment, or when changing it later.
+
+When run as root, frontend dependency installation and build are automatically executed as a normal user instead of root. The default build user is the owner of the frontend/backend project directory. Override it if needed:
+
+```bash
+sudo \
+  FRONTEND_BUILD_USER=deploy \
+  SERVER_NAME=dec.example.com \
+  scripts/manage.sh web-deploy
+```
+
 If `SSL_CERTIFICATE` and `SSL_CERTIFICATE_KEY` are omitted, the generated site listens on HTTP only. This is useful when HTTPS is managed by 1Panel or another outer reverse-proxy/certificate layer.
 
 If you want this generated Nginx site to terminate HTTPS itself, pass both certificate paths:
