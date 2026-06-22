@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace MusicDecrypto.Backend;
 
@@ -13,7 +14,8 @@ internal static class UpdatePackageService
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        WriteIndented = true
+        WriteIndented = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
 
     public static IReadOnlyCollection<UpdateBatchInfo> ListBatches(string updateRoot)

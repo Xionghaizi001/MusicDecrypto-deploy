@@ -7,6 +7,7 @@ namespace MusicDecrypto.Backend;
 internal sealed class DecryptionWorker(
     JobQueue queue,
     JobStore jobs,
+    JobRuntimeLogService jobRuntimeLogs,
     IOptions<AppOptions> options,
     IWebHostEnvironment environment,
     ILogger<DecryptionWorker> logger) : BackgroundService
@@ -29,7 +30,8 @@ internal sealed class DecryptionWorker(
             catch (Exception ex)
             {
                 logger.LogError(ex, "Unhandled error while processing job {JobId}", jobId);
-                await jobs.MarkFailedAsync(jobId, ex.Message, CancellationToken.None);
+                await WriteRuntimeLogAsync(jobId, "Unhandled processing error", ex.ToString(), CancellationToken.None);
+                await jobs.MarkFailedAsync(jobId, "Unexpected processing error.", CancellationToken.None);
             }
         }
     }
@@ -57,12 +59,12 @@ internal sealed class DecryptionWorker(
                 continue;
             }
 
-            var log = TrimLog(
-                job.Log ?? string.Empty,
-                $"Recovered existing output file on service startup: {outputFile.Path}",
-                $"OutputSource: {outputFile.Source}");
-
-            await jobs.MarkCompletedAsync(job.Id, outputFile.Path, log, cancellationToken);
+            await WriteRuntimeLogAsync(
+                job.Id,
+                "Recovered existing output file on service startup",
+                TrimLog($"OutputPath: {outputFile.Path}", $"OutputSource: {outputFile.Source}"),
+                cancellationToken);
+            await jobs.MarkCompletedAsync(job.Id, outputFile.Path, cancellationToken);
             logger.LogInformation(
                 "Recovered failed job {JobId} with existing output file. OutputPath={OutputPath}, OutputSource={OutputSource}, OutputBytes={OutputBytes}",
                 job.Id,
@@ -78,18 +80,21 @@ internal sealed class DecryptionWorker(
         {
             if (!File.Exists(job.InputPath))
             {
-                var error = $"Input file no longer exists: {job.InputPath}";
-                logger.LogWarning("Pending job {JobId} cannot be requeued: {Error}", job.Id, error);
-                await jobs.MarkFailedAsync(job.Id, error, cancellationToken);
+                var detail = $"Input file no longer exists: {job.InputPath}";
+                logger.LogWarning("Pending job {JobId} cannot be requeued: {Error}", job.Id, detail);
+                await WriteRuntimeLogAsync(job.Id, "Pending job cannot be requeued", detail, cancellationToken);
+                await jobs.MarkFailedAsync(job.Id, "Uploaded input file is no longer available.", cancellationToken);
                 continue;
             }
 
             if (job.Status == JobStatus.Running)
             {
-                await jobs.MarkQueuedAsync(
+                await WriteRuntimeLogAsync(
                     job.Id,
                     "Service restarted while job was running; job was queued for another attempt.",
+                    "Service restarted while job was running; job was queued for another attempt.",
                     cancellationToken);
+                await jobs.MarkQueuedAsync(job.Id, cancellationToken);
             }
 
             await queue.EnqueueAsync(job.Id, cancellationToken);
@@ -121,17 +126,27 @@ internal sealed class DecryptionWorker(
         var executablePath = Path.GetFullPath(options.Value.DecryptoExecutablePath, environment.ContentRootPath);
         if (!File.Exists(executablePath))
         {
-            var error = $"Decrypto executable not found: {executablePath}";
-            logger.LogError("Job {JobId} failed before process start: {Error}", jobId, error);
-            await jobs.MarkFailedAsync(jobId, error, cancellationToken, BuildPreflightLog(job, executablePath, null, error));
+            var detail = $"Decrypto executable not found: {executablePath}";
+            logger.LogError("Job {JobId} failed before process start: {Error}", jobId, detail);
+            await WriteRuntimeLogAsync(
+                jobId,
+                "Job failed before process start",
+                BuildPreflightLog(job, executablePath, null, detail),
+                cancellationToken);
+            await jobs.MarkFailedAsync(jobId, "Server decryption tool is not available.", cancellationToken);
             return;
         }
 
         if (!File.Exists(job.InputPath))
         {
-            var error = $"Input file not found before decrypto start: {job.InputPath}";
-            logger.LogError("Job {JobId} failed before process start: {Error}", jobId, error);
-            await jobs.MarkFailedAsync(jobId, error, cancellationToken, BuildPreflightLog(job, executablePath, null, error));
+            var detail = $"Input file not found before decrypto start: {job.InputPath}";
+            logger.LogError("Job {JobId} failed before process start: {Error}", jobId, detail);
+            await WriteRuntimeLogAsync(
+                jobId,
+                "Job failed before process start",
+                BuildPreflightLog(job, executablePath, null, detail),
+                cancellationToken);
+            await jobs.MarkFailedAsync(jobId, "Uploaded input file is no longer available.", cancellationToken);
             return;
         }
 
@@ -178,7 +193,12 @@ internal sealed class DecryptionWorker(
                 commandLine,
                 startInfo.WorkingDirectory,
                 result.StartError);
-            await jobs.MarkFailedAsync(jobId, error, cancellationToken, BuildProcessLog(job, startInfo, result));
+            await WriteRuntimeLogAsync(
+                jobId,
+                "Failed to start decrypto process",
+                BuildProcessLog(job, startInfo, result),
+                cancellationToken);
+            await jobs.MarkFailedAsync(jobId, error, cancellationToken);
             return;
         }
 
@@ -193,7 +213,12 @@ internal sealed class DecryptionWorker(
                 commandLine,
                 TrimLog(result.Stdout),
                 TrimLog(result.Stderr));
-            await jobs.MarkFailedAsync(jobId, error, cancellationToken, BuildProcessLog(job, startInfo, result));
+            await WriteRuntimeLogAsync(
+                jobId,
+                "Decrypto process failed",
+                BuildProcessLog(job, startInfo, result),
+                cancellationToken);
+            await jobs.MarkFailedAsync(jobId, error, cancellationToken);
             return;
         }
 
@@ -216,7 +241,12 @@ internal sealed class DecryptionWorker(
                 error,
                 outputDirectory,
                 Path.GetDirectoryName(job.InputPath));
-            await jobs.MarkFailedAsync(jobId, error, cancellationToken, BuildProcessLog(job, startInfo, result));
+            await WriteRuntimeLogAsync(
+                jobId,
+                "Decrypto finished without output file",
+                BuildProcessLog(job, startInfo, result),
+                cancellationToken);
+            await jobs.MarkFailedAsync(jobId, error, cancellationToken);
             return;
         }
 
@@ -227,7 +257,21 @@ internal sealed class DecryptionWorker(
             outputFile.Source,
             outputFile.Size);
 
-        await jobs.MarkCompletedAsync(jobId, outputFile.Path, BuildProcessLog(job, startInfo, result), cancellationToken);
+        await WriteRuntimeLogAsync(
+            jobId,
+            "Job completed",
+            BuildProcessLog(job, startInfo, result),
+            cancellationToken);
+        await jobs.MarkCompletedAsync(jobId, outputFile.Path, cancellationToken);
+    }
+
+    private Task WriteRuntimeLogAsync(
+        string jobId,
+        string title,
+        string detail,
+        CancellationToken cancellationToken)
+    {
+        return jobRuntimeLogs.WriteAsync(jobId, title, TrimLog(detail), cancellationToken);
     }
 
     private static async Task<ProcessResult> RunProcessAsync(ProcessStartInfo startInfo, CancellationToken cancellationToken)

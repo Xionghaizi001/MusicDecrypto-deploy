@@ -187,8 +187,14 @@ internal static class UpdatePage
     const batches = document.getElementById('batches');
     const status = document.getElementById('status');
 
-    const reverse = value => Array.from(value).reverse().join('');
+    const sanitizeInput = value => String(value).replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]/gu, '');
+    const reverse = value => Array.from(sanitizeInput(value).trim()).reverse().join('');
     const authHeaders = () => ({ 'X-Update-Key': reverse(keyInput.value) });
+
+    keyInput.addEventListener('input', () => {
+      const sanitized = sanitizeInput(keyInput.value);
+      if (sanitized !== keyInput.value) keyInput.value = sanitized;
+    });
 
     async function request(path, options = {}) {
       const response = await fetch(path, {

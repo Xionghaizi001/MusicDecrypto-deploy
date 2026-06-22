@@ -21,6 +21,7 @@ builder.Services.Configure<AppOptions>(builder.Configuration.GetSection("MusicDe
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    options.SerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
 });
 builder.Services.AddCors(options =>
 {
@@ -64,6 +65,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<JobStore>();
 builder.Services.AddSingleton<JobQueue>();
 builder.Services.AddSingleton<JobDeletionService>();
+builder.Services.AddSingleton<JobRuntimeLogService>();
 builder.Services.AddSingleton<UpdateDeploymentService>();
 builder.Services.AddHostedService<DecryptionWorker>();
 builder.Services.AddHostedService<JobCleanupWorker>();
@@ -82,12 +84,32 @@ app.MapGet("/healthz", () => Results.Ok(new
     utc = DateTimeOffset.UtcNow
 }));
 
-app.MapGet("/api/jobs", (JobStore jobs) => Results.Ok(jobs.GetAll()));
-
-app.MapGet("/api/jobs/{id}", Results<Ok<JobRecord>, NotFound> (string id, JobStore jobs) =>
+app.MapGet("/api/jobs", Results<Ok<IReadOnlyCollection<JobResponse>>, BadRequest<string>> (
+    HttpRequest request,
+    JobStore jobs) =>
 {
+    var validationError = ValidateApiRequestShape(request);
+    if (validationError is not null)
+    {
+        return TypedResults.BadRequest(validationError);
+    }
+
+    return TypedResults.Ok((IReadOnlyCollection<JobResponse>)jobs.GetAll().Select(JobResponse.From).ToArray());
+});
+
+app.MapGet("/api/jobs/{id}", Results<Ok<JobResponse>, NotFound, BadRequest<string>> (
+    string id,
+    HttpRequest request,
+    JobStore jobs) =>
+{
+    var validationError = ValidateJobApiRequest(request, id);
+    if (validationError is not null)
+    {
+        return TypedResults.BadRequest(validationError);
+    }
+
     var job = jobs.Get(id);
-    return job is null ? TypedResults.NotFound() : TypedResults.Ok(job);
+    return job is null ? TypedResults.NotFound() : TypedResults.Ok(JobResponse.From(job));
 });
 
 app.MapGet("/api/jobs/{id}/download", IResult (
@@ -97,6 +119,12 @@ app.MapGet("/api/jobs/{id}/download", IResult (
     IOptions<AppOptions> options,
     IWebHostEnvironment environment) =>
 {
+    var validationError = ValidateJobApiRequest(httpContext.Request, id);
+    if (validationError is not null)
+    {
+        return Results.BadRequest(validationError);
+    }
+
     var job = jobs.Get(id);
     if (job is null)
     {
@@ -114,7 +142,7 @@ app.MapGet("/api/jobs/{id}/download", IResult (
     }
 
     httpContext.Response.Headers[HeaderNames.ContentDisposition] =
-        BuildContentDisposition(Path.GetFileName(job.OutputPath));
+        BuildContentDisposition(FileNameSanitizer.Sanitize(Path.GetFileName(job.OutputPath)));
 
     var paths = AppPaths.From(options.Value, environment.ContentRootPath);
     var xAccelRedirect = BuildXAccelRedirect(job.OutputPath, paths.Outputs);
@@ -153,6 +181,19 @@ app.UseTus(httpContext =>
             bufferSize: new TusDiskBufferSize(LargeFileBufferSize, LargeFileBufferSize)),
         Events = new Events
         {
+            OnBeforeCreateAsync = eventContext =>
+            {
+                var unsupportedMetadata = eventContext.Metadata.Keys
+                    .Where(key => !string.Equals(key, "filename", StringComparison.Ordinal))
+                    .ToArray();
+
+                if (unsupportedMetadata.Length > 0)
+                {
+                    eventContext.FailRequest("Unsupported upload metadata.");
+                }
+
+                return Task.CompletedTask;
+            },
             OnFileCompleteAsync = async eventContext =>
             {
                 var logger = eventContext.HttpContext.RequestServices
@@ -163,7 +204,8 @@ app.UseTus(httpContext =>
                 {
                     var file = await eventContext.GetFileAsync();
                     var metadata = await file.GetMetadataAsync(eventContext.CancellationToken);
-                    var originalName = TusMetadataReader.GetString(metadata, "filename") ?? $"{file.Id}.bin";
+                    var originalName = FileNameSanitizer.Sanitize(
+                        TusMetadataReader.GetString(metadata, "filename") ?? $"{file.Id}.bin");
                     var safeName = FileNameSanitizer.Sanitize(originalName);
 
                     var jobId = Guid.NewGuid().ToString("N");
@@ -216,10 +258,17 @@ app.Run();
 
 static async Task<Results<Ok<JobDeleteResult>, NotFound, Conflict<string>, BadRequest<string>>> DeleteJobAsync(
     string id,
+    HttpRequest request,
     JobStore jobs,
     JobDeletionService deletion,
     CancellationToken cancellationToken)
 {
+    var validationError = ValidateJobApiRequest(request, id);
+    if (validationError is not null)
+    {
+        return TypedResults.BadRequest(validationError);
+    }
+
     var job = jobs.Get(id);
     if (job is null)
     {
@@ -245,10 +294,51 @@ static async Task<Results<Ok<JobDeleteResult>, NotFound, Conflict<string>, BadRe
 
 static string BuildContentDisposition(string fileName)
 {
+    fileName = FileNameSanitizer.Sanitize(fileName);
     var fallback = BuildAsciiFileNameFallback(fileName);
     var encoded = Uri.EscapeDataString(fileName);
 
     return $"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}";
+}
+
+static string? ValidateJobApiRequest(HttpRequest request, string jobId)
+{
+    if (!IsValidJobId(jobId))
+    {
+        return "Invalid job id.";
+    }
+
+    return ValidateApiRequestShape(request);
+}
+
+static string? ValidateApiRequestShape(HttpRequest request)
+{
+    if (request.Query.Count > 0)
+    {
+        return "Unexpected query fields.";
+    }
+
+    if (HasRequestBodyData(request))
+    {
+        return "Unexpected request body.";
+    }
+
+    return null;
+}
+
+static bool IsValidJobId(string id)
+{
+    return id.Length == 32 && id.All(Uri.IsHexDigit);
+}
+
+static bool HasRequestBodyData(HttpRequest request)
+{
+    if (request.ContentLength is > 0)
+    {
+        return true;
+    }
+
+    return request.Headers.TransferEncoding.Count > 0;
 }
 
 static string BuildAsciiFileNameFallback(string fileName)

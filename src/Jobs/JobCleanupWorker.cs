@@ -47,7 +47,7 @@ internal sealed class JobCleanupWorker(
                     "Automatically deleted expired job {JobId}. RetentionDays={RetentionDays}, DeletedCount={DeletedCount}",
                     job.Id,
                     retentionDays,
-                    result.DeletedPaths.Count);
+                    result.DeletedCount);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

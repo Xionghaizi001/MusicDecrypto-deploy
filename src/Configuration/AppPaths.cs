@@ -1,6 +1,6 @@
 namespace MusicDecrypto.Backend;
 
-internal sealed record AppPaths(string Root, string TempRoot, string TusStore, string Uploads, string Outputs, string State, string Updates, string UpdateApplyRoot)
+internal sealed record AppPaths(string Root, string TempRoot, string TusStore, string Uploads, string Outputs, string State, string Logs, string Updates, string UpdateApplyRoot)
 {
     public static AppPaths From(AppOptions options, string contentRoot)
     {
@@ -15,6 +15,7 @@ internal sealed record AppPaths(string Root, string TempRoot, string TusStore, s
             Path.Combine(root, "uploads"),
             Path.Combine(root, "outputs"),
             Path.Combine(root, "state"),
+            Path.Combine(root, "logs"),
             updateRoot,
             updateApplyRoot);
     }

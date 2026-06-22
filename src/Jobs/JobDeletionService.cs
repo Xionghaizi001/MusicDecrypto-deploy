@@ -30,7 +30,7 @@ internal sealed class JobDeletionService(
             deleted.Count,
             missing.Count);
 
-        return new JobDeleteResult(job.Id, deleted, missing);
+        return new JobDeleteResult(job.Id, deleted.Count, missing.Count);
     }
 
     private static void DeleteJobPrefixedFiles(
@@ -85,5 +85,5 @@ internal sealed class JobDeletionService(
 
 internal sealed record JobDeleteResult(
     string JobId,
-    IReadOnlyCollection<string> DeletedPaths,
-    IReadOnlyCollection<string> MissingPaths);
+    int DeletedCount,
+    int MissingCount);

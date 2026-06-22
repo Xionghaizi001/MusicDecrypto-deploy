@@ -77,7 +77,7 @@ internal sealed class JobStore
         return true;
     }
 
-    public Task MarkQueuedAsync(string id, string log, CancellationToken cancellationToken)
+    public Task MarkQueuedAsync(string id, CancellationToken cancellationToken)
     {
         return UpdateAsync(id, job => job with
         {
@@ -85,8 +85,7 @@ internal sealed class JobStore
             StartedAt = null,
             CompletedAt = null,
             UpdatedAt = DateTimeOffset.UtcNow,
-            Error = null,
-            Log = log
+            Error = null
         }, cancellationToken);
     }
 
@@ -101,26 +100,24 @@ internal sealed class JobStore
         }, cancellationToken);
     }
 
-    public Task MarkCompletedAsync(string id, string outputPath, string log, CancellationToken cancellationToken)
+    public Task MarkCompletedAsync(string id, string outputPath, CancellationToken cancellationToken)
     {
         return UpdateAsync(id, job => job with
         {
             Status = JobStatus.Completed,
             OutputPath = outputPath,
-            Log = log,
             CompletedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
             Error = null
         }, cancellationToken);
     }
 
-    public Task MarkFailedAsync(string id, string error, CancellationToken cancellationToken, string? log = null)
+    public Task MarkFailedAsync(string id, string error, CancellationToken cancellationToken)
     {
         return UpdateAsync(id, job => job with
         {
             Status = JobStatus.Failed,
             Error = error,
-            Log = log ?? job.Log,
             CompletedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         }, cancellationToken);
