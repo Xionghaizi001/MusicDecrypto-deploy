@@ -1,0 +1,15 @@
+bin/
+obj/
+data/
+data/tmp/
+data/updates/
+publish/
+update-*.zip
+/package/
+*.user
+*.suo
+.vs/
+.codex
+.agents
+.claude
+.gemini

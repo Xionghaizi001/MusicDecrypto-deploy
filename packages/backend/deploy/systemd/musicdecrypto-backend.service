@@ -1,0 +1,30 @@
+[Unit]
+Description=MusicDecrypto Backend
+After=network.target
+
+[Service]
+Type=simple
+User=musicdecrypto
+Group=musicdecrypto
+WorkingDirectory=/opt/musicdecrypto/backend
+Environment=PATH=/opt/dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/env dotnet /opt/musicdecrypto/backend/publish/MusicDecrypto.Backend.dll
+Restart=always
+RestartSec=5
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=Kestrel__Endpoints__Http__Url=http://127.0.0.1:5080
+Environment=MusicDecrypto__StorageRoot=/var/lib/musicdecrypto
+Environment=MusicDecrypto__TempRoot=/var/tmp/musicdecrypto
+Environment=MusicDecrypto__UpdateRoot=/var/lib/musicdecrypto/updates
+Environment=MusicDecrypto__UpdateApplyRoot=/opt/musicdecrypto/backend
+Environment=MusicDecrypto__DecryptoExecutablePath=/opt/musicdecrypto/backend/package/musicdecrypto
+# Set this on the VPS with systemctl edit musicdecrypto-backend:
+# Environment=MusicDecrypto__ApiKey=replace-with-a-long-random-secret
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=-/var/lib/musicdecrypto -/var/tmp/musicdecrypto -/var/lib/musicdecrypto/updates -/opt/musicdecrypto/backend
+
+[Install]
+WantedBy=multi-user.target
